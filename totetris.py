@@ -252,9 +252,15 @@ class GameRoom:
     def lock_piece(self, player: PlayerState) -> None:
         if not player.piece:
             return
+        overflow = False
         for x, y in self.piece_cells(player.piece):
             if 0 <= y < self.height and 0 <= x < self.width:
                 self.board[y][x] = player.pid
+                if y < 3:
+                    overflow = True
+        if overflow:
+            self.finish_game(winner=self.opponent_id(player.pid), reason="overflow")
+            return
         cleared = self.clear_full_lines()
         if cleared:
             player.score += cleared
@@ -787,6 +793,12 @@ GAME_HTML = """
 
       ctx.fillStyle = '#0f172a';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const dangerZoneRows = 3;
+      ctx.fillStyle = 'rgba(248,113,113,0.12)';
+      for (let y = 0; y < Math.min(dangerZoneRows, rows); y++) {
+        ctx.fillRect(0, y * CELL_SIZE, canvas.width, CELL_SIZE);
+      }
 
       for (let y = 0; y < rows; y++) {
         for (let x = 0; x < cols; x++) {

@@ -533,62 +533,54 @@ INDEX_HTML = """
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
   <title>Totetris</title>
   <style>
+    :root { color-scheme: dark; }
     body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; }
-    main { max-width: 780px; margin: 0 auto; padding: 2rem; text-align: center; }
-    h1 { margin-top: 0; }
-    button, input[type=text] { padding: 0.75rem 1.25rem; font-size: 1rem; border-radius: 0.5rem; border: none; }
-    button { background: #38bdf8; color: #0f172a; cursor: pointer; font-weight: 600; }
-    button:hover { background: #0ea5e9; }
-    .actions { display: flex; flex-direction: column; gap: 1rem; align-items: center; }
-    .join { display: flex; gap: 0.5rem; }
-    input[type=text] { width: 10rem; border: 2px solid #334155; background: #1e293b; color: #f8fafc; }
-    footer { margin-top: 3rem; font-size: 0.85rem; color: #94a3b8; }
+    main { max-width: 720px; margin: 0 auto; padding: 3rem 1.5rem; text-align: center; display: flex; flex-direction: column; gap: 2rem; align-items: center; }
+    h1 { margin: 0; font-size: clamp(2.25rem, 4vw, 3rem); }
+    .lead { font-size: 1.1rem; line-height: 1.6; margin: 0; color: #cbd5f5; }
+    .rules { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.75rem; }
+    .rules li { background: rgba(15, 23, 42, 0.6); padding: 0.85rem 1rem; border-radius: 0.75rem; border: 1px solid rgba(148, 163, 184, 0.15); }
+    .play-button { padding: 1.1rem 2.75rem; font-size: 1.25rem; border-radius: 999px; border: none; cursor: pointer; background: linear-gradient(135deg, #38bdf8, #818cf8); color: #0f172a; font-weight: 700; box-shadow: 0 20px 40px rgba(56, 189, 248, 0.35); transition: transform 0.2s ease, box-shadow 0.2s ease; }
+    .play-button:hover { transform: translateY(-2px); box-shadow: 0 24px 50px rgba(56, 189, 248, 0.45); }
+    .play-button:disabled { opacity: 0.6; cursor: wait; box-shadow: none; }
+    .note { font-size: 0.95rem; color: #94a3b8; margin: 0; line-height: 1.5; }
   </style>
 </head>
 <body>
   <main>
     <h1>Totetris</h1>
-    <p>Создайте комнату и пригласите друга, чтобы сыграть в тетрис 1 на 1.</p>
-    <div class=\"actions\">
-      <button id=\"create\">Создать игру</button>
-      <div class=\"join\">
-        <input id=\"room\" type=\"text\" placeholder=\"код комнаты\" maxlength=\"6\" />
-        <button id=\"join\">Подключиться</button>
-      </div>
-    </div>
-    <footer>
-      <p>Управление: стрелки &larr; &rarr; — движение, &uarr; — поворот, пробел — ускорение, Shift — мгновенный дроп.</p>
-    </footer>
+    <p class=\"lead\">Сыграйте в дуэльный тетрис с другом: пригласите соперника и выясните, кто продержится дольше.</p>
+    <ul class=\"rules\">
+      <li>Создайте приватную комнату — ссылку можно отправить любым способом.</li>
+      <li>Как только второй игрок присоединится, начнётся короткий обратный отсчёт.</li>
+      <li>После сигнала появится игровое поле и зачтутся очки за сброшенные линии.</li>
+    </ul>
+    <button id=\"play\" class=\"play-button\">Сыграть с другом</button>
+    <p class=\"note\">Управление: стрелки &larr; &rarr; — движение, &uarr; — поворот, пробел — ускорение, Shift — мгновенный дроп.</p>
   </main>
   <script>
-    const createButton = document.getElementById('create');
-    const joinButton = document.getElementById('join');
-    const roomInput = document.getElementById('room');
+    const playButton = document.getElementById('play');
 
-    async function createGame() {
-      const response = await fetch('/api/create', { method: 'POST' });
-      if (!response.ok) {
-        alert('Не удалось создать игру');
-        return;
+    async function startGame() {
+      if (playButton.disabled) return;
+      const originalText = playButton.textContent;
+      playButton.disabled = true;
+      playButton.textContent = 'Создание комнаты...';
+      try {
+        const response = await fetch('/api/create', { method: 'POST' });
+        if (!response.ok) {
+          throw new Error('failed');
+        }
+        const data = await response.json();
+        window.location.href = `/game/${data.room}`;
+      } catch (error) {
+        alert('Не удалось создать игру. Попробуйте ещё раз.');
+        playButton.disabled = false;
+        playButton.textContent = originalText;
       }
-      const data = await response.json();
-      window.location.href = `/game/${data.room}`;
     }
 
-    function joinGame() {
-      const room = roomInput.value.trim().toLowerCase();
-      if (room.length === 0) {
-        alert('Введите код комнаты');
-        return;
-      }
-      window.location.href = `/game/${room}`;
-    }
-
-    createButton.addEventListener('click', createGame);
-    joinButton.addEventListener('click', joinGame);
-    roomInput.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') joinGame();
-    });
+    playButton.addEventListener('click', startGame);
   </script>
 </body>
 </html>
@@ -603,43 +595,69 @@ GAME_HTML = """
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
   <title>Totetris — игра</title>
   <style>
+    :root { color-scheme: dark; }
     body { margin: 0; font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; }
-    main { display: flex; flex-direction: column; align-items: center; padding: 1rem; gap: 1rem; }
+    main { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 2rem 1rem; gap: 1.5rem; min-height: 100vh; box-sizing: border-box; }
+    h1 { margin: 0; }
     #board { background: #1e293b; border: 2px solid #334155; border-radius: 0.5rem; box-shadow: 0 12px 40px rgba(15,23,42,0.35); }
-    .hud { display: flex; gap: 2rem; justify-content: center; }
-    .panel { background: rgba(15, 23, 42, 0.7); padding: 1rem 1.5rem; border-radius: 0.75rem; min-width: 180px; }
-    h1 { margin-bottom: 0.25rem; }
+    .game-area { display: flex; flex-direction: column; align-items: center; gap: 1.25rem; }
+    .game-area.hidden { display: none !important; }
+    .hud { display: flex; flex-wrap: wrap; gap: 1.5rem; justify-content: center; }
+    .panel { background: rgba(15, 23, 42, 0.75); padding: 1.25rem 1.5rem; border-radius: 0.75rem; min-width: 200px; box-shadow: 0 18px 45px rgba(15, 23, 42, 0.45); border: 1px solid rgba(148, 163, 184, 0.12); }
     h2 { margin: 0 0 0.75rem 0; font-size: 1rem; }
     .scores { list-style: none; padding: 0; margin: 0; }
     .scores li { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
     .badge { display: inline-block; width: 12px; height: 12px; border-radius: 999px; margin-right: 0.5rem; }
     .status { font-weight: 600; }
-    .link { color: #38bdf8; }
-    .actions { display: flex; gap: 0.75rem; margin-top: 0.5rem; }
-    button { padding: 0.5rem 1rem; border-radius: 0.5rem; border: none; cursor: pointer; background: #38bdf8; color: #0f172a; font-weight: 600; }
+    .link { color: #38bdf8; cursor: pointer; }
+    .actions { display: flex; gap: 0.75rem; margin-top: 0.75rem; flex-wrap: wrap; }
+    button { padding: 0.65rem 1.1rem; border-radius: 0.65rem; border: none; cursor: pointer; background: #38bdf8; color: #0f172a; font-weight: 600; }
     button:hover { background: #0ea5e9; }
+    .overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.94); display: flex; align-items: center; justify-content: center; padding: 2rem; z-index: 20; }
+    .overlay.hidden { display: none; }
+    .overlay-box { max-width: 440px; width: min(90vw, 440px); background: rgba(15, 23, 42, 0.88); border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 1rem; padding: 2.5rem 2rem; text-align: center; box-shadow: 0 30px 90px rgba(15, 23, 42, 0.65); }
+    .overlay-box h2 { margin: 0 0 1rem 0; font-size: 1.6rem; }
+    .overlay-box p { margin: 0 0 1.75rem 0; line-height: 1.6; color: #cbd5f5; }
+    .overlay-share { display: flex; flex-direction: column; gap: 0.75rem; align-items: center; }
+    .overlay-share.hidden { display: none; }
+    .overlay-link { background: rgba(30, 41, 59, 0.92); padding: 0.75rem 1rem; border-radius: 0.75rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; word-break: break-all; width: 100%; box-sizing: border-box; border: 1px solid rgba(148, 163, 184, 0.25); color: #e2e8f0; }
+    .overlay-copy { padding: 0.65rem 1.6rem; border-radius: 999px; border: none; cursor: pointer; background: #38bdf8; color: #0f172a; font-weight: 600; }
+    .overlay-copy:hover { background: #0ea5e9; }
+    .hidden { display: none !important; }
   </style>
 </head>
 <body>
   <main>
     <h1>Totetris</h1>
-    <canvas id=\"board\" width=\"400\" height=\"600\"></canvas>
-    <div class=\"hud\">
-      <div class=\"panel\">
-        <h2>Статус</h2>
-        <div id=\"status\" class=\"status\"></div>
-        <div id=\"timer\"></div>
-        <div class=\"actions\">
-          <button id=\"restart\" disabled>Рестарт</button>
-          <a class=\"link\" id=\"invite\" target=\"_blank\">Скопировать ссылку</a>
+    <div id=\"game-area\" class=\"game-area hidden\">
+      <canvas id=\"board\" width=\"400\" height=\"600\"></canvas>
+      <div class=\"hud\">
+        <div class=\"panel\">
+          <h2>Статус</h2>
+          <div id=\"status\" class=\"status\"></div>
+          <div id=\"timer\"></div>
+          <div class=\"actions\">
+            <button id=\"restart\" disabled>Рестарт</button>
+            <a class=\"link\" id=\"invite\" target=\"_blank\">Скопировать ссылку</a>
+          </div>
         </div>
-      </div>
-      <div class=\"panel\">
-        <h2>Счёт</h2>
-        <ul id=\"scores\" class=\"scores\"></ul>
+        <div class=\"panel\">
+          <h2>Счёт</h2>
+          <ul id=\"scores\" class=\"scores\"></ul>
+        </div>
       </div>
     </div>
   </main>
+  <div id=\"overlay\" class=\"overlay\">
+    <div class=\"overlay-box\">
+      <h2 id=\"overlay-title\">Подключение...</h2>
+      <p id=\"overlay-text\">Подключаемся к комнате, пожалуйста, подождите.</p>
+      <div id=\"overlay-share\" class=\"overlay-share hidden\">
+        <span id=\"overlay-link\" class=\"overlay-link\"></span>
+        <button id=\"overlay-copy\" class=\"overlay-copy\">Скопировать ссылку</button>
+      </div>
+    </div>
+  </div>
   <script>
     const roomId = "{room_id}";
     const CELL_SIZE = 20;
@@ -650,18 +668,66 @@ GAME_HTML = """
     const scoresEl = document.getElementById('scores');
     const restartButton = document.getElementById('restart');
     const inviteLink = document.getElementById('invite');
+    const inviteLinkDefaultText = inviteLink.textContent;
+    const gameArea = document.getElementById('game-area');
+    const overlay = document.getElementById('overlay');
+    const overlayTitle = document.getElementById('overlay-title');
+    const overlayText = document.getElementById('overlay-text');
+    const overlayShare = document.getElementById('overlay-share');
+    const overlayLink = document.getElementById('overlay-link');
+    const overlayCopy = document.getElementById('overlay-copy');
+    const overlayCopyDefaultText = overlayCopy.textContent;
 
     inviteLink.href = window.location.href;
     inviteLink.addEventListener('click', (event) => {
       event.preventDefault();
-      navigator.clipboard.writeText(window.location.href).then(() => {
-        inviteLink.textContent = 'Ссылка скопирована!';
-        setTimeout(() => inviteLink.textContent = 'Скопировать ссылку', 2000);
-      });
+      copyInviteLink(inviteLink);
+    });
+
+    overlayCopy.addEventListener('click', (event) => {
+      event.preventDefault();
+      copyInviteLink(overlayCopy);
     });
 
     let ws = null;
     let you = null;
+
+    function copyInviteLink(target) {
+      const originalText = target.textContent;
+      const showSuccess = () => {
+        target.textContent = 'Ссылка скопирована!';
+        setTimeout(() => { target.textContent = originalText; }, 2000);
+      };
+      const fallback = () => {
+        const response = window.prompt('Скопируйте ссылку и отправьте другу:', window.location.href);
+        if (response !== null) {
+          showSuccess();
+        }
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(window.location.href).then(showSuccess).catch(fallback);
+      } else {
+        fallback();
+      }
+    }
+
+    function showOverlay(title, text, { showShare = false } = {}) {
+      overlayTitle.textContent = title;
+      overlayText.textContent = text;
+      if (showShare) {
+        overlayShare.classList.remove('hidden');
+        overlayLink.textContent = window.location.href;
+        overlayCopy.textContent = overlayCopyDefaultText;
+        inviteLink.textContent = inviteLinkDefaultText;
+      } else {
+        overlayShare.classList.add('hidden');
+      }
+      overlay.classList.remove('hidden');
+    }
+
+    function hideOverlay() {
+      overlay.classList.add('hidden');
+    }
 
     function connect() {
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -675,6 +741,8 @@ GAME_HTML = """
 
       ws.addEventListener('close', () => {
         statusEl.textContent = 'Соединение потеряно';
+        showOverlay('Соединение потеряно', 'Перезагрузите страницу, чтобы попробовать снова.');
+        gameArea.classList.add('hidden');
       });
     }
 
@@ -714,7 +782,7 @@ GAME_HTML = """
     }
 
     function formatStatus(state) {
-      if (state.status === 'waiting') return 'Ожидание второго игрока';
+      if (state.status === 'waiting') return 'Ждём соперника';
       if (state.status === 'countdown') return `Старт через ${state.countdown} сек.`;
       if (state.status === 'running') return 'Игра идёт';
       if (state.status === 'finished') {
@@ -756,6 +824,23 @@ GAME_HTML = """
       timerEl.textContent = formatTimer(state);
       restartButton.disabled = state.status !== 'finished';
       updateScores(state.players);
+
+      const showBoard = state.status === 'running' || state.status === 'finished';
+      gameArea.classList.toggle('hidden', !showBoard);
+
+      if (!showBoard) {
+        if (state.status === 'waiting') {
+          showOverlay('Ожидание соперника', 'Отправьте своему другу ссылку, чтобы начать игру.', { showShare: true });
+        } else if (state.status === 'countdown') {
+          const seconds = Math.max(state.countdown, 0);
+          const text = seconds > 0 ? `Игра начнётся через ${seconds} сек.` : 'Игра начинается!';
+          showOverlay('Готовьтесь!', text);
+        } else {
+          showOverlay('Подключение...', 'Ожидаем состояние комнаты.');
+        }
+      } else {
+        hideOverlay();
+      }
     }
 
     function sendAction(action, data = {}) {

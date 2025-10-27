@@ -258,21 +258,33 @@ class GameRoom:
                 self.board[y][x] = player.pid
                 if y < 3:
                     overflow = True
+        player.piece = None
         if overflow:
-            self.finish_game(winner=self.opponent_id(player.pid), reason="overflow")
+            self.apply_penalty_and_reset(player)
             return
         cleared = self.clear_full_lines()
         if cleared:
             player.score += cleared
         if not self.spawn_piece(player):
-            player.score -= 10
-            self.reset_board()
-            for other in self.players.values():
-                if other is not player:
-                    other.piece = None
-                    self.spawn_piece(other)
+            self.apply_penalty_and_reset(player)
+            return
         if player.score < 0:
             self.finish_game(winner=self.opponent_id(player.pid), reason="negative_score")
+
+    def apply_penalty_and_reset(self, offender: PlayerState) -> None:
+        offender.score -= 10
+        if offender.score < 0:
+            self.finish_game(
+                winner=self.opponent_id(offender.pid), reason="negative_score"
+            )
+            return
+        self.reset_board()
+        for participant in self.players.values():
+            participant.piece = None
+            participant.soft_drop = False
+            if not participant.next_queue:
+                participant.next_queue.extend(self.generate_bag())
+            self.spawn_piece(participant)
 
     def clear_full_lines(self) -> int:
         removed = 0

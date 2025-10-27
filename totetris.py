@@ -196,16 +196,19 @@ class GameRoom:
                 occupied.update(self.piece_cells(player.piece))
         return occupied
 
-    def can_place(self, piece: ActivePiece, owner: Optional[str] = None) -> bool:
+    def collision_type(self, piece: ActivePiece, owner: Optional[str] = None) -> Optional[str]:
         blocked_cells = self.active_piece_cells(exclude_pid=owner)
         for x, y in self.piece_cells(piece):
             if x < 0 or x >= self.width or y < 0 or y >= self.height:
-                return False
+                return "bounds"
             if self.board[y][x] is not None:
-                return False
+                return "board"
             if (x, y) in blocked_cells:
-                return False
-        return True
+                return "opponent"
+        return None
+
+    def can_place(self, piece: ActivePiece, owner: Optional[str] = None) -> bool:
+        return self.collision_type(piece, owner=owner) is None
 
     def spawn_anchor(self, pid: str) -> Tuple[int, int]:
         top_y = 0
@@ -297,8 +300,11 @@ class GameRoom:
             next_piece = ActivePiece(
                 player.piece.kind, player.piece.rotation, player.piece.x, player.piece.y + 1
             )
-            if self.can_place(next_piece, owner=player.pid):
+            collision = self.collision_type(next_piece, owner=player.pid)
+            if collision is None:
                 player.piece = next_piece
+            elif collision == "opponent":
+                break
             else:
                 self.lock_piece(player)
                 break
@@ -312,8 +318,11 @@ class GameRoom:
             next_piece = ActivePiece(
                 player.piece.kind, player.piece.rotation, player.piece.x, player.piece.y + 1
             )
-            if self.can_place(next_piece, owner=player.pid):
+            collision = self.collision_type(next_piece, owner=player.pid)
+            if collision is None:
                 player.piece = next_piece
+            elif collision == "opponent":
+                break
             else:
                 self.lock_piece(player)
                 break

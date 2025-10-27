@@ -34,6 +34,12 @@
 - `totetris.ini` — конфигурационный файл (таймер, размеры поля, скорость игры).
 
 ## Запуск
+
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ./totetris.py
 ```
+
+По умолчанию сервер стартует на `http://localhost:8000`. После запуска откройте главную страницу, создайте игру и отправьте ссылку другу.

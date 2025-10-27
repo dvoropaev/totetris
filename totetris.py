@@ -11,7 +11,7 @@ import random
 import string
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -187,33 +187,57 @@ class GameRoom:
         rotation = self.piece_rotations(piece.kind)[piece.rotation]
         return [(piece.x + dx, piece.y + dy) for dx, dy in rotation]
 
-    def can_place(self, piece: ActivePiece) -> bool:
+    def active_piece_cells(self, exclude_pid: Optional[str] = None) -> Set[Tuple[int, int]]:
+        occupied: Set[Tuple[int, int]] = set()
+        for pid, player in self.players.items():
+            if exclude_pid is not None and pid == exclude_pid:
+                continue
+            if player.piece:
+                occupied.update(self.piece_cells(player.piece))
+        return occupied
+
+    def can_place(self, piece: ActivePiece, owner: Optional[str] = None) -> bool:
+        blocked_cells = self.active_piece_cells(exclude_pid=owner)
         for x, y in self.piece_cells(piece):
             if x < 0 or x >= self.width or y < 0 or y >= self.height:
                 return False
             if self.board[y][x] is not None:
                 return False
+            if (x, y) in blocked_cells:
+                return False
         return True
+
+    def spawn_anchor(self, pid: str) -> Tuple[int, int]:
+        top_y = 0
+        if pid == "p1":
+            return 0, top_y
+        if pid == "p2":
+            return max(0, self.width - 4), top_y
+        return max(0, self.width // 2 - 2), top_y
 
     def spawn_piece(self, player: PlayerState) -> bool:
         if not player.next_queue:
             player.next_queue.extend(self.generate_bag())
         kind = player.next_queue.pop(0)
-        piece = ActivePiece(kind=kind, rotation=0, x=self.width // 2 - 2, y=0)
-        for rotation_index in range(len(self.piece_rotations(kind))):
-            candidate = ActivePiece(kind, rotation_index, piece.x, piece.y)
-            if self.can_place(candidate):
-                player.piece = candidate
-                return True
-        # Try shifting horizontally if rotation alone is insufficient.
-        for offset in range(1, 4):
-            for direction in (-1, 1):
-                x = piece.x + offset * direction
-                for rotation_index in range(len(self.piece_rotations(kind))):
-                    candidate = ActivePiece(kind, rotation_index, x, piece.y)
-                    if self.can_place(candidate):
-                        player.piece = candidate
-                        return True
+        anchor_x, anchor_y = self.spawn_anchor(player.pid)
+        direction = 1 if anchor_x <= self.width // 2 else -1
+        tried: Set[int] = set()
+        offsets = [0]
+        for step in range(1, self.width):
+            offsets.append(step * direction)
+            offsets.append(-step * direction)
+        for delta in offsets:
+            x = anchor_x + delta
+            if x < 0 or x >= self.width:
+                continue
+            if x in tried:
+                continue
+            tried.add(x)
+            for rotation_index in range(len(self.piece_rotations(kind))):
+                candidate = ActivePiece(kind, rotation_index, x, anchor_y)
+                if self.can_place(candidate, owner=player.pid):
+                    player.piece = candidate
+                    return True
         player.piece = None
         return False
 
@@ -263,7 +287,7 @@ class GameRoom:
         rotation_count = len(self.piece_rotations(piece.kind))
         new_rotation = (piece.rotation + rotate) % rotation_count
         candidate = ActivePiece(piece.kind, new_rotation, piece.x + dx, piece.y + dy)
-        if self.can_place(candidate):
+        if self.can_place(candidate, owner=player.pid):
             player.piece = candidate
 
     def soft_drop_piece(self, player: PlayerState) -> None:
@@ -273,7 +297,7 @@ class GameRoom:
             next_piece = ActivePiece(
                 player.piece.kind, player.piece.rotation, player.piece.x, player.piece.y + 1
             )
-            if self.can_place(next_piece):
+            if self.can_place(next_piece, owner=player.pid):
                 player.piece = next_piece
             else:
                 self.lock_piece(player)
@@ -288,7 +312,7 @@ class GameRoom:
             next_piece = ActivePiece(
                 player.piece.kind, player.piece.rotation, player.piece.x, player.piece.y + 1
             )
-            if self.can_place(next_piece):
+            if self.can_place(next_piece, owner=player.pid):
                 player.piece = next_piece
             else:
                 self.lock_piece(player)

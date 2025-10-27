@@ -755,7 +755,7 @@ GAME_HTML = """
     }
 
     document.addEventListener('keydown', (event) => {
-      if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'Space', 'ShiftLeft', 'ShiftRight'].includes(event.code)) {
+      if (['ArrowLeft', 'ArrowRight', 'ArrowDown', 'Space', 'ShiftLeft', 'ShiftRight'].includes(event.code)) {
         event.preventDefault();
       }
       switch (event.code) {
@@ -765,11 +765,11 @@ GAME_HTML = """
         case 'ArrowRight':
           sendAction('move', { direction: 'right' });
           break;
-        case 'ArrowUp':
-          sendAction('rotate');
+        case 'ArrowDown':
+          sendAction('drop');
           break;
         case 'Space':
-          sendAction('drop');
+          sendAction('rotate');
           break;
         case 'ShiftLeft':
         case 'ShiftRight':

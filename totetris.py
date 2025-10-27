@@ -540,6 +540,15 @@ INDEX_HTML = """
     .lead { font-size: 1.1rem; line-height: 1.6; margin: 0; color: #cbd5f5; }
     .rules { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.75rem; }
     .rules li { background: rgba(15, 23, 42, 0.6); padding: 0.85rem 1rem; border-radius: 0.75rem; border: 1px solid rgba(148, 163, 184, 0.15); }
+    .details { width: 100%; background: rgba(15, 23, 42, 0.55); border-radius: 1rem; padding: 1.75rem; border: 1px solid rgba(148, 163, 184, 0.12); text-align: left; display: grid; gap: 1.5rem; box-shadow: 0 18px 45px rgba(15, 23, 42, 0.4); }
+    .details h2 { margin: 0; font-size: 1.4rem; }
+    .details p { margin: 0; line-height: 1.6; color: #cbd5f5; }
+    .details-grid { display: grid; gap: 1rem; }
+    @media (min-width: 720px) { .details-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    .details-card { background: rgba(15, 23, 42, 0.75); border-radius: 0.9rem; border: 1px solid rgba(148, 163, 184, 0.14); padding: 1.1rem 1.25rem; display: grid; gap: 0.75rem; }
+    .details-card h3 { margin: 0; font-size: 1.1rem; color: #f8fafc; }
+    .details-card ul { margin: 0; padding-left: 1.1rem; display: grid; gap: 0.5rem; color: #cbd5f5; }
+    .details-card li { line-height: 1.5; }
     .play-button { padding: 1.1rem 2.75rem; font-size: 1.25rem; border-radius: 999px; border: none; cursor: pointer; background: linear-gradient(135deg, #38bdf8, #818cf8); color: #0f172a; font-weight: 700; box-shadow: 0 20px 40px rgba(56, 189, 248, 0.35); transition: transform 0.2s ease, box-shadow 0.2s ease; }
     .play-button:hover { transform: translateY(-2px); box-shadow: 0 24px 50px rgba(56, 189, 248, 0.45); }
     .play-button:disabled { opacity: 0.6; cursor: wait; box-shadow: none; }
@@ -555,6 +564,30 @@ INDEX_HTML = """
       <li>Как только второй игрок присоединится, начнётся короткий обратный отсчёт.</li>
       <li>После сигнала появится игровое поле и зачтутся очки за сброшенные линии.</li>
     </ul>
+    <section class=\"details\">
+      <div>
+        <h2>Как идёт матч</h2>
+        <p>Игра длится ограниченное время: после отсчёта оба игрока одновременно получают первые фигуры и стараются удержаться как можно дольше, не допуская заполнения верхней строки.</p>
+      </div>
+      <div class=\"details-grid\">
+        <article class=\"details-card\">
+          <h3>Ход игры</h3>
+          <ul>
+            <li>Фигуры появляются по одной из общей очереди, у каждого игрока есть предпросмотр следующих элементов.</li>
+            <li>Можно двигать фигуру влево и вправо, вращать и ускорять падение, чтобы быстрее занимать выгодные позиции.</li>
+            <li>Если поле заполняется до верха, игрок выбывает, а соперник автоматически побеждает.</li>
+          </ul>
+        </article>
+        <article class=\"details-card\">
+          <h3>Подсчёт очков</h3>
+          <ul>
+            <li>За каждую очищенную линию начисляется базовое количество очков: 100 за одну, 300 за две, 500 за три и 800 за тетрис.</li>
+            <li>Комбо из последовательных очисток увеличивает награду: каждое следующее комбо добавляет +50 к базовой сумме.</li>
+            <li>Победителем считается тот, кто набрал больше очков к концу таймера или выжил дольше соперника.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
     <button id=\"play\" class=\"play-button\">Сыграть с другом</button>
     <p class=\"note\">Управление: стрелки &larr; &rarr; — движение, &uarr; — поворот, пробел — ускорение, Shift — мгновенный дроп.</p>
   </main>

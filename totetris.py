@@ -30,7 +30,6 @@ class GameConfig:
     tick_ms: int = 500
     countdown: int = 5
     game_duration: int = 300
-    overflow_ends_game: bool = False
 
     @classmethod
     def from_file(cls, path: Path) -> "GameConfig":
@@ -43,9 +42,6 @@ class GameConfig:
             tick_ms=int(section.get("tick_ms", cls.tick_ms)),
             countdown=int(section.get("countdown", cls.countdown)),
             game_duration=int(section.get("game_duration", cls.game_duration)),
-            overflow_ends_game=section.getboolean(
-                "overflow_ends_game", fallback=cls.overflow_ends_game
-            ),
         )
 
 
@@ -111,6 +107,8 @@ TETROMINOES: Dict[str, List[List[Tuple[int, int]]]] = {
 
 PLAYER_COLORS = {"p1": "#70c1ff", "p2": "#ff6b6b"}
 
+DANGER_ZONE_ROWS = 3
+
 
 def generate_room_id(length: int = 6) -> str:
     alphabet = string.ascii_lowercase + string.digits
@@ -146,6 +144,9 @@ class GameRoom:
         self.finished_reason: Optional[str] = None
         self.winner: Optional[str] = None
         self.last_cleared_lines: List[int] = []
+        self.penalty_event_counter: int = 0
+        self.last_penalty_event: Optional[Dict[str, object]] = None
+        self.penalty_event_dirty: bool = False
 
     # ------------------------- utility methods -------------------------
 
@@ -184,6 +185,9 @@ class GameRoom:
             "winner": self.winner,
             "reason": self.finished_reason,
             "cleared_lines": list(self.last_cleared_lines),
+            "penalty_event": dict(self.last_penalty_event)
+            if self.penalty_event_dirty and self.last_penalty_event
+            else None,
         }
 
     def piece_rotations(self, kind: str) -> List[List[Tuple[int, int]]]:
@@ -258,7 +262,9 @@ class GameRoom:
     def lock_piece(self, player: PlayerState) -> None:
         if not player.piece:
             return
-        for x, y in self.piece_cells(player.piece):
+        placed_cells = self.piece_cells(player.piece)
+        touched_danger_zone = any(y < DANGER_ZONE_ROWS for _, y in placed_cells)
+        for x, y in placed_cells:
             if 0 <= y < self.height and 0 <= x < self.width:
                 self.board[y][x] = player.pid
         player.piece = None
@@ -266,13 +272,8 @@ class GameRoom:
         self.last_cleared_lines = cleared
         if cleared:
             player.score += len(cleared)
-        if self.board_overflowed():
-            if self.config.overflow_ends_game:
-                self.finish_game(
-                    winner=self.opponent_id(player.pid), reason="overflow"
-                )
-            else:
-                self.apply_penalty_and_reset(player)
+        if touched_danger_zone:
+            self.apply_penalty_and_reset(player, highlight_zone=True)
             return
         if not self.spawn_piece(player):
             self.apply_penalty_and_reset(player)
@@ -280,7 +281,9 @@ class GameRoom:
         if player.score < 0:
             self.finish_game(winner=self.opponent_id(player.pid), reason="negative_score")
 
-    def apply_penalty_and_reset(self, offender: PlayerState) -> None:
+    def apply_penalty_and_reset(
+        self, offender: PlayerState, *, highlight_zone: bool = False
+    ) -> None:
         offender.score -= 10
         if offender.score < 0:
             self.finish_game(
@@ -288,12 +291,20 @@ class GameRoom:
             )
             return
         self.reset_board()
+        self.last_cleared_lines = []
         for participant in self.players.values():
             participant.piece = None
             participant.soft_drop = False
             if not participant.next_queue:
                 participant.next_queue.extend(self.generate_bag())
             self.spawn_piece(participant)
+        self.penalty_event_counter += 1
+        self.last_penalty_event = {
+            "id": self.penalty_event_counter,
+            "player": offender.pid,
+            "highlight_zone": highlight_zone,
+        }
+        self.penalty_event_dirty = True
 
     def clear_full_lines(self) -> List[int]:
         removed: List[int] = []
@@ -307,11 +318,6 @@ class GameRoom:
                 y -= 1
         removed.sort()
         return removed
-
-    def board_overflowed(self) -> bool:
-        if self.height == 0:
-            return False
-        return any(self.board[0][x] is not None for x in range(self.width))
 
     def opponent_id(self, pid: str) -> Optional[str]:
         return "p2" if pid == "p1" else "p1" if pid == "p2" else None
@@ -478,6 +484,7 @@ class GameRoom:
             except RuntimeError:
                 continue
         self.last_cleared_lines = []
+        self.penalty_event_dirty = False
 
     async def handle_message(self, pid: str, data: Dict[str, object]) -> None:
         player = self.players[pid]
@@ -729,6 +736,9 @@ GAME_HTML = """
     const roomId = "{room_id}";
     const CELL_SIZE = 20;
     const CLEAR_ANIMATION_DURATION = 480;
+    const DANGER_ZONE_ROWS = 3;
+    const DANGER_FLASH_DURATION = 1000;
+    const BOARD_RESET_DURATION = 900;
     const canvas = document.getElementById('board');
     const ctx = canvas.getContext('2d');
     const statusEl = document.getElementById('status');
@@ -762,6 +772,9 @@ GAME_HTML = """
     let currentState = null;
     let animationFrame = null;
     let clearAnimation = null;
+    let penaltyFlash = null;
+    let boardResetAnimation = null;
+    let lastPenaltyEventId = 0;
 
     function copyInviteLink(target) {
       const originalText = target.textContent;
@@ -826,20 +839,44 @@ GAME_HTML = """
     function render(timestamp) {
       animationFrame = null;
       if (!currentState) return;
+      const now = typeof timestamp === 'number' ? timestamp : performance.now();
       let animation = null;
+      let effects = {};
+      let needsMoreFrames = false;
       if (clearAnimation) {
-        const progress = Math.min((timestamp - clearAnimation.start) / CLEAR_ANIMATION_DURATION, 1);
+        const progress = Math.min((now - clearAnimation.start) / CLEAR_ANIMATION_DURATION, 1);
         animation = { lines: clearAnimation.lines, progress };
         if (progress < 1) {
-          animationFrame = requestAnimationFrame(render);
+          needsMoreFrames = true;
         } else {
           clearAnimation = null;
         }
       }
-      drawBoard(currentState.board, currentState.players, animation);
+      if (penaltyFlash) {
+        const elapsed = now - penaltyFlash.start;
+        if (elapsed < DANGER_FLASH_DURATION) {
+          effects.dangerFlash = { progress: elapsed / DANGER_FLASH_DURATION };
+          needsMoreFrames = true;
+        } else {
+          penaltyFlash = null;
+        }
+      }
+      if (boardResetAnimation) {
+        const elapsed = now - boardResetAnimation.start;
+        if (elapsed < BOARD_RESET_DURATION) {
+          effects.boardClear = { progress: elapsed / BOARD_RESET_DURATION };
+          needsMoreFrames = true;
+        } else {
+          boardResetAnimation = null;
+        }
+      }
+      drawBoard(currentState.board, currentState.players, animation, effects);
+      if (needsMoreFrames) {
+        animationFrame = requestAnimationFrame(render);
+      }
     }
 
-    function drawBoard(board, players, animation) {
+    function drawBoard(board, players, animation, effects = {}) {
       const rows = board.length;
       const cols = board[0].length;
       canvas.width = cols * CELL_SIZE;
@@ -848,10 +885,34 @@ GAME_HTML = """
       ctx.fillStyle = '#0f172a';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      const dangerZoneRows = 3;
-      ctx.fillStyle = 'rgba(248,113,113,0.12)';
-      for (let y = 0; y < Math.min(dangerZoneRows, rows); y++) {
+      const dangerFlash = effects.dangerFlash;
+      let dangerAlpha = 0.12;
+      if (dangerFlash) {
+        const t = Math.min(Math.max(dangerFlash.progress, 0), 1);
+        const pulse = Math.sin(Math.PI * t);
+        dangerAlpha = Math.min(0.75, 0.12 + 0.28 * (1 - t) + 0.42 * pulse);
+      }
+      ctx.fillStyle = `rgba(248,113,113,${dangerAlpha})`;
+      for (let y = 0; y < Math.min(DANGER_ZONE_ROWS, rows); y++) {
         ctx.fillRect(0, y * CELL_SIZE, canvas.width, CELL_SIZE);
+      }
+      if (dangerFlash) {
+        ctx.save();
+        const glowStrength = Math.min(Math.max(1 - dangerFlash.progress, 0), 1);
+        ctx.globalAlpha = 0.35 * glowStrength;
+        const gradient = ctx.createLinearGradient(0, 0, canvas.width, CELL_SIZE * DANGER_ZONE_ROWS);
+        gradient.addColorStop(0, 'rgba(248,250,252,0.0)');
+        gradient.addColorStop(0.5, 'rgba(254,226,226,0.9)');
+        gradient.addColorStop(1, 'rgba(248,250,252,0.0)');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, canvas.width, CELL_SIZE * Math.min(DANGER_ZONE_ROWS, rows));
+        ctx.restore();
+        ctx.save();
+        ctx.globalAlpha = 0.4 * glowStrength;
+        ctx.strokeStyle = 'rgba(248,113,113,0.9)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(1, 1, canvas.width - 2, CELL_SIZE * Math.min(DANGER_ZONE_ROWS, rows) - 2);
+        ctx.restore();
       }
 
       for (let y = 0; y < rows; y++) {
@@ -877,6 +938,46 @@ GAME_HTML = """
           ctx.fillRect(x * CELL_SIZE + 1, y * CELL_SIZE + 1, CELL_SIZE - 2, CELL_SIZE - 2);
         }
         ctx.globalAlpha = 1;
+      }
+
+      if (effects.boardClear) {
+        const t = Math.min(Math.max(effects.boardClear.progress, 0), 1);
+        const waveFront = t * (rows + 6);
+        for (let y = 0; y < rows; y++) {
+          const distance = waveFront - y;
+          if (distance <= 0) continue;
+          const local = Math.min(distance / 3, 1);
+          const alpha = 0.45 * (1 - Math.pow(local, 0.8));
+          if (alpha <= 0) continue;
+          const top = y * CELL_SIZE;
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          const gradient = ctx.createLinearGradient(0, top, canvas.width, top + CELL_SIZE);
+          gradient.addColorStop(0, 'rgba(56,189,248,0)');
+          gradient.addColorStop(0.5, 'rgba(226,232,240,0.75)');
+          gradient.addColorStop(1, 'rgba(56,189,248,0)');
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, top, canvas.width, CELL_SIZE);
+          ctx.restore();
+        }
+        ctx.save();
+        const glow = Math.max(0, 1 - t * 0.85);
+        ctx.globalAlpha = 0.35 * glow;
+        const centerY = canvas.height * (0.25 + 0.65 * t);
+        const radius = canvas.width * (0.45 + 0.55 * t);
+        const radial = ctx.createRadialGradient(
+          canvas.width / 2,
+          centerY,
+          Math.max(8, radius * 0.25),
+          canvas.width / 2,
+          centerY,
+          radius
+        );
+        radial.addColorStop(0, 'rgba(56,189,248,0.55)');
+        radial.addColorStop(1, 'rgba(15,23,42,0)');
+        ctx.fillStyle = radial;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.restore();
       }
 
       if (animation && Array.isArray(animation.lines) && animation.lines.length > 0) {
@@ -977,6 +1078,16 @@ GAME_HTML = """
 
     function updateUI(state) {
       currentState = state;
+      if (state.penalty_event && state.penalty_event.id) {
+        if (state.penalty_event.id !== lastPenaltyEventId) {
+          lastPenaltyEventId = state.penalty_event.id;
+          const now = performance.now();
+          boardResetAnimation = { start: now };
+          if (state.penalty_event.highlight_zone) {
+            penaltyFlash = { start: now };
+          }
+        }
+      }
       if (Array.isArray(state.cleared_lines) && state.cleared_lines.length > 0) {
         clearAnimation = { lines: state.cleared_lines, start: performance.now() };
       }

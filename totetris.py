@@ -795,11 +795,15 @@ INDEX_HTML = """
     .play-button { padding: 1.1rem 2.75rem; font-size: 1.25rem; border-radius: 999px; border: none; cursor: pointer; background: linear-gradient(135deg, #38bdf8, #818cf8); color: #0f172a; font-weight: 700; box-shadow: 0 20px 40px rgba(56, 189, 248, 0.35); transition: transform 0.2s ease, box-shadow 0.2s ease; }
     .play-button:hover { transform: translateY(-2px); box-shadow: 0 24px 50px rgba(56, 189, 248, 0.45); }
     .play-button:disabled { opacity: 0.6; cursor: wait; box-shadow: none; }
-    .player-name-box { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.75rem; padding: 0.75rem 1.25rem; border-radius: 999px; background: rgba(15, 23, 42, 0.55); border: 1px solid rgba(148, 163, 184, 0.12); color: #cbd5f5; }
+    .player-name-box { display: grid; gap: 0.6rem; padding: 1rem 1.5rem; border-radius: 1rem; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(148, 163, 184, 0.16); color: #cbd5f5; max-width: 360px; width: min(100%, 360px); text-align: center; }
     .player-name-label { font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.75rem; color: #94a3b8; }
-    .player-name-value { font-weight: 600; font-size: 1rem; color: #f8fafc; }
-    .change-name-button { padding: 0.5rem 1.2rem; border-radius: 999px; border: none; cursor: pointer; background: rgba(56, 189, 248, 0.15); color: #38bdf8; font-weight: 600; transition: background 0.2s ease, color 0.2s ease; }
-    .change-name-button:hover { background: rgba(56, 189, 248, 0.25); color: #f0f9ff; }
+    .player-name-input { width: 100%; padding: 0.65rem 0.95rem; border-radius: 0.75rem; border: 1px solid rgba(148, 163, 184, 0.35); background: rgba(15, 23, 42, 0.9); color: #f8fafc; font-size: 1rem; transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease; }
+    .player-name-input:focus { outline: none; border-color: rgba(56, 189, 248, 0.85); box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2); background: rgba(15, 23, 42, 0.95); }
+    .player-name-hint { margin: 0; font-size: 0.85rem; color: #94a3b8; }
+    .player-name-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.75rem; align-items: center; }
+    .change-name-button { padding: 0.5rem 1.6rem; border-radius: 999px; border: none; cursor: pointer; background: rgba(56, 189, 248, 0.15); color: #38bdf8; font-weight: 600; transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease; }
+    .change-name-button:hover { background: rgba(56, 189, 248, 0.25); color: #f0f9ff; transform: translateY(-1px); }
+    .player-name-status { min-height: 1em; font-size: 0.85rem; color: #94a3b8; }
     .cta-buttons { display: flex; flex-wrap: wrap; justify-content: center; gap: 1rem; }
     .random-button { background: linear-gradient(135deg, #f97316, #fb7185); box-shadow: 0 20px 40px rgba(251, 113, 133, 0.35); }
     .random-button:hover { transform: translateY(-2px); box-shadow: 0 24px 50px rgba(251, 113, 133, 0.45); }
@@ -840,11 +844,15 @@ INDEX_HTML = """
         </article>
       </div>
     </section>
-    <div class=\"player-name-box\">
-      <span class=\"player-name-label\">Ваше имя</span>
-      <span id=\"player-name-display\" class=\"player-name-value\"></span>
-      <button id=\"change-name\" class=\"change-name-button\">Сменить имя</button>
-    </div>
+    <form id=\"player-name-form\" class=\"player-name-box\" autocomplete=\"off\">
+      <label class=\"player-name-label\" for=\"player-name-input\">Ваше имя</label>
+      <input id=\"player-name-input\" class=\"player-name-input\" name=\"name\" type=\"text\" maxlength=\"40\" placeholder=\"Игрок\" />
+      <p class=\"player-name-hint\">Это имя увидит ваш соперник.</p>
+      <div class=\"player-name-actions\">
+        <button type=\"submit\" id=\"save-name\" class=\"change-name-button\">Сохранить</button>
+        <span id=\"player-name-status\" class=\"player-name-status\" aria-live=\"polite\"></span>
+      </div>
+    </form>
     <div class=\"cta-buttons\">
       <button id=\"play\" class=\"play-button\">Сыграть с другом</button>
       <button id=\"random\" class=\"play-button random-button\">Случайный соперник</button>
@@ -857,8 +865,9 @@ INDEX_HTML = """
     const playButton = document.getElementById('play');
     const randomButton = document.getElementById('random');
     const randomStatus = document.getElementById('random-status');
-    const nameDisplay = document.getElementById('player-name-display');
-    const changeNameButton = document.getElementById('change-name');
+    const nameForm = document.getElementById('player-name-form');
+    const nameInput = document.getElementById('player-name-input');
+    const nameStatus = document.getElementById('player-name-status');
 
     function getStoredPlayerName() {
       const prefix = `${PLAYER_NAME_COOKIE}=`;
@@ -890,14 +899,6 @@ INDEX_HTML = """
       return normalized;
     }
 
-    function requestPlayerName(initial = '', fallbackName = 'Игрок') {
-      const response = window.prompt('Как к вам обращаться?', initial);
-      if (response === null) {
-        return normalizePlayerName(initial, fallbackName);
-      }
-      return normalizePlayerName(response, fallbackName);
-    }
-
     function ensurePlayerName() {
       const storedRaw = getStoredPlayerName();
       const stored = normalizePlayerName(storedRaw, '');
@@ -907,37 +908,62 @@ INDEX_HTML = """
         }
         return stored;
       }
-      const fresh = requestPlayerName('', 'Игрок');
-      return persistPlayerName(fresh);
+      return persistPlayerName('Игрок');
     }
 
-    function updateNameDisplay(name) {
-      if (nameDisplay) {
-        nameDisplay.textContent = name;
+    function commitPlayerName(value) {
+      const normalized = normalizePlayerName(value, 'Игрок');
+      return persistPlayerName(normalized);
+    }
+
+    function updateNameInput(value) {
+      if (nameInput) {
+        nameInput.value = value;
       }
     }
 
-    function promptAndStoreName(currentName = '') {
-      const normalizedCurrent = normalizePlayerName(currentName, '');
-      const next = requestPlayerName(normalizedCurrent, normalizedCurrent || 'Игрок');
-      return persistPlayerName(next);
+    let nameStatusTimeout = null;
+    function showNameStatus(text) {
+      if (!nameStatus) return;
+      nameStatus.textContent = text;
+      if (nameStatusTimeout) {
+        clearTimeout(nameStatusTimeout);
+      }
+      if (text) {
+        nameStatusTimeout = setTimeout(() => {
+          nameStatus.textContent = '';
+          nameStatusTimeout = null;
+        }, 2500);
+      }
     }
 
     let currentPlayerName = ensurePlayerName();
-    updateNameDisplay(currentPlayerName);
+    updateNameInput(currentPlayerName);
 
-    if (changeNameButton) {
-      changeNameButton.addEventListener('click', (event) => {
+    if (nameForm) {
+      nameForm.addEventListener('submit', (event) => {
         event.preventDefault();
-        currentPlayerName = promptAndStoreName(currentPlayerName);
-        updateNameDisplay(currentPlayerName);
+        const next = commitPlayerName(nameInput ? nameInput.value : currentPlayerName);
+        currentPlayerName = next;
+        updateNameInput(next);
+        showNameStatus('Сохранено');
+      });
+    }
+
+    if (nameInput) {
+      nameInput.addEventListener('input', () => {
+        if (nameStatusTimeout) {
+          clearTimeout(nameStatusTimeout);
+          nameStatusTimeout = null;
+        }
+        showNameStatus('');
       });
     }
 
     async function startGame() {
       if (playButton.disabled) return;
-      currentPlayerName = ensurePlayerName();
-      updateNameDisplay(currentPlayerName);
+      currentPlayerName = commitPlayerName(nameInput ? nameInput.value : currentPlayerName);
+      updateNameInput(currentPlayerName);
       const originalText = playButton.textContent;
       const randomWasDisabled = randomButton.disabled;
       playButton.disabled = true;
@@ -964,8 +990,8 @@ INDEX_HTML = """
 
     async function findRandomOpponent() {
       if (randomButton.disabled) return;
-      currentPlayerName = ensurePlayerName();
-      updateNameDisplay(currentPlayerName);
+      currentPlayerName = commitPlayerName(nameInput ? nameInput.value : currentPlayerName);
+      updateNameInput(currentPlayerName);
       const originalText = randomButton.textContent;
       randomButton.disabled = true;
       playButton.disabled = true;
@@ -1033,6 +1059,16 @@ GAME_HTML = """
     .overlay-box { max-width: 440px; width: min(90vw, 440px); background: rgba(15, 23, 42, 0.88); border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 1rem; padding: 2.5rem 2rem; text-align: center; box-shadow: 0 30px 90px rgba(15, 23, 42, 0.65); }
     .overlay-box h2 { margin: 0 0 1rem 0; font-size: 1.6rem; }
     .overlay-box p { margin: 0 0 1.75rem 0; line-height: 1.6; color: #cbd5f5; }
+    .overlay-message.hidden { display: none; }
+    .overlay-form { display: grid; gap: 0.75rem; margin-top: 0.5rem; }
+    .overlay-form.hidden { display: none; }
+    .overlay-form-label { font-weight: 600; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; }
+    .overlay-input { width: 100%; padding: 0.75rem 1rem; border-radius: 0.85rem; border: 1px solid rgba(148, 163, 184, 0.35); background: rgba(15, 23, 42, 0.92); color: #f8fafc; font-size: 1rem; transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease; }
+    .overlay-input:focus { outline: none; border-color: rgba(56, 189, 248, 0.85); box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2); background: rgba(15, 23, 42, 0.96); }
+    .overlay-form-error { margin: 0; font-size: 0.85rem; color: #fca5a5; min-height: 1.2em; }
+    .overlay-form-actions { display: flex; justify-content: center; gap: 0.75rem; align-items: center; }
+    .overlay-primary-button { padding: 0.65rem 1.8rem; border-radius: 999px; border: none; cursor: pointer; font-weight: 600; background: linear-gradient(135deg, #38bdf8, #818cf8); color: #0f172a; box-shadow: 0 16px 40px rgba(56, 189, 248, 0.35); transition: transform 0.2s ease, box-shadow 0.2s ease; }
+    .overlay-primary-button:hover { transform: translateY(-1px); box-shadow: 0 20px 48px rgba(56, 189, 248, 0.45); }
     .overlay-link-wrapper { display: grid; gap: 0.4rem; align-items: center; justify-items: center; }
     .overlay-link-wrapper.hidden { display: none; }
     .overlay-link-label { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; }
@@ -1075,7 +1111,17 @@ GAME_HTML = """
   <div id=\"overlay\" class=\"overlay\">
     <div class=\"overlay-box\">
       <h2 id=\"overlay-title\">Подключение...</h2>
-      <p id=\"overlay-text\">Подключаемся к комнате, пожалуйста, подождите.</p>
+      <div id=\"overlay-message\" class=\"overlay-message\">
+        <p id=\"overlay-text\">Подключаемся к комнате, пожалуйста, подождите.</p>
+      </div>
+      <form id=\"overlay-name-form\" class=\"overlay-form hidden\" autocomplete=\"off\">
+        <label class=\"overlay-form-label\" for=\"overlay-name-input\">Ваше имя</label>
+        <input id=\"overlay-name-input\" class=\"overlay-input\" name=\"name\" type=\"text\" maxlength=\"40\" placeholder=\"Игрок\" />
+        <p id=\"overlay-name-error\" class=\"overlay-form-error\" aria-live=\"polite\"></p>
+        <div class=\"overlay-form-actions\">
+          <button type=\"submit\" class=\"overlay-primary-button\">Продолжить</button>
+        </div>
+      </form>
       <div id=\"overlay-link-wrapper\" class=\"overlay-link-wrapper hidden\">
         <span class=\"overlay-link-label\">Ссылка на комнату</span>
         <span id=\"overlay-link\" class=\"overlay-link\"></span>
@@ -1113,6 +1159,10 @@ GAME_HTML = """
     const overlay = document.getElementById('overlay');
     const overlayTitle = document.getElementById('overlay-title');
     const overlayText = document.getElementById('overlay-text');
+    const overlayMessage = document.getElementById('overlay-message');
+    const overlayForm = document.getElementById('overlay-name-form');
+    const overlayNameInput = document.getElementById('overlay-name-input');
+    const overlayNameError = document.getElementById('overlay-name-error');
     const overlayLinkWrapper = document.getElementById('overlay-link-wrapper');
     const overlayLink = document.getElementById('overlay-link');
 
@@ -1148,12 +1198,40 @@ GAME_HTML = """
       return normalized;
     }
 
-    function requestPlayerName(initial = '', fallbackName = 'Игрок') {
-      const response = window.prompt('Как к вам обращаться?', initial);
-      if (response === null) {
-        return normalizePlayerName(initial, fallbackName);
+    let pendingNamePromise = null;
+    let resolvePendingName = null;
+
+    function showNameForm(initial = '') {
+      if (overlayTitle) {
+        overlayTitle.textContent = 'Введите имя';
       }
-      return normalizePlayerName(response, fallbackName);
+      if (overlayText) {
+        overlayText.textContent = 'Укажите имя, которое увидит соперник.';
+      }
+      if (overlayMessage) {
+        overlayMessage.classList.remove('hidden');
+      }
+      if (overlayForm) {
+        overlayForm.classList.remove('hidden');
+      }
+      if (overlayLinkWrapper) {
+        overlayLinkWrapper.classList.add('hidden');
+      }
+      if (overlayLink) {
+        overlayLink.textContent = '';
+      }
+      if (overlayNameError) {
+        overlayNameError.textContent = '';
+      }
+      if (overlay) {
+        overlay.classList.remove('hidden');
+      }
+      if (overlayNameInput) {
+        overlayNameInput.value = initial;
+        requestAnimationFrame(() => {
+          overlayNameInput.focus();
+        });
+      }
     }
 
     function ensurePlayerName() {
@@ -1163,14 +1241,65 @@ GAME_HTML = """
         if (stored !== storedRaw) {
           persistPlayerName(stored);
         }
-        return stored;
+        return Promise.resolve(stored);
       }
-      const fresh = requestPlayerName('', 'Игрок');
-      return persistPlayerName(fresh);
+      if (pendingNamePromise) {
+        return pendingNamePromise;
+      }
+      pendingNamePromise = new Promise((resolve) => {
+        resolvePendingName = resolve;
+        showNameForm('');
+      });
+      return pendingNamePromise;
     }
 
-    let localPlayerName = ensurePlayerName();
+    if (overlayForm) {
+      overlayForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const raw = overlayNameInput ? overlayNameInput.value : '';
+        const normalized = normalizePlayerName(raw, '');
+        if (!normalized) {
+          if (overlayNameError) {
+            overlayNameError.textContent = 'Введите имя, чтобы продолжить.';
+          }
+          if (overlayNameInput) {
+            overlayNameInput.focus();
+          }
+          return;
+        }
+        const persisted = persistPlayerName(normalized);
+        if (overlayNameError) {
+          overlayNameError.textContent = '';
+        }
+        if (overlayNameInput) {
+          overlayNameInput.value = persisted;
+        }
+        if (typeof resolvePendingName === 'function') {
+          const resolver = resolvePendingName;
+          resolvePendingName = null;
+          pendingNamePromise = null;
+          resolver(persisted);
+        }
+      });
+    }
+
+    if (overlayNameInput) {
+      overlayNameInput.addEventListener('input', () => {
+        if (overlayNameError) {
+          overlayNameError.textContent = '';
+        }
+      });
+    }
+
+    let localPlayerName = '';
     updateScores({});
+
+    (async () => {
+      localPlayerName = await ensurePlayerName();
+      updateScores({});
+      showOverlay('Подключение...', 'Подключаемся к комнате, пожалуйста, подождите.');
+      connect();
+    })();
 
     let ws = null;
     let you = null;
@@ -1183,8 +1312,21 @@ GAME_HTML = """
     let lastPenaltyEventId = 0;
 
     function showOverlay(title, text, { link = null } = {}) {
-      overlayTitle.textContent = title;
-      overlayText.textContent = text;
+      if (overlayTitle) {
+        overlayTitle.textContent = title;
+      }
+      if (overlayText) {
+        overlayText.textContent = text;
+      }
+      if (overlayMessage) {
+        overlayMessage.classList.remove('hidden');
+      }
+      if (overlayForm) {
+        overlayForm.classList.add('hidden');
+      }
+      if (overlayNameError) {
+        overlayNameError.textContent = '';
+      }
       if (link) {
         overlayLinkWrapper.classList.remove('hidden');
         overlayLink.textContent = link;
@@ -1197,6 +1339,9 @@ GAME_HTML = """
 
     function hideOverlay() {
       overlay.classList.add('hidden');
+      if (overlayForm) {
+        overlayForm.classList.add('hidden');
+      }
     }
 
     function connect() {
@@ -1204,7 +1349,9 @@ GAME_HTML = """
       ws = new WebSocket(`${protocol}://${window.location.host}/ws/${roomId}`);
 
       ws.addEventListener('open', () => {
-        localPlayerName = ensurePlayerName();
+        if (!localPlayerName) {
+          localPlayerName = normalizePlayerName(getStoredPlayerName(), 'Игрок');
+        }
         sendAction('set_name', { name: localPlayerName });
       });
 

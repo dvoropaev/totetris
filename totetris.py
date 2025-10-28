@@ -690,16 +690,59 @@ class GameManager:
                 self.rooms[room_id] = room
             return room
 
+    async def remove_room(self, room_id: str) -> None:
+        async with self.lock:
+            self.rooms.pop(room_id, None)
+
 
 # ---------------------------------------------------------------------------
 # Web application
 # ---------------------------------------------------------------------------
 
 
+class RandomMatchmaker:
+    def __init__(self, manager: GameManager) -> None:
+        self.manager = manager
+        self._waiting: Optional[Tuple[str, asyncio.Future[str]]] = None
+        self._lock = asyncio.Lock()
+
+    async def join(self) -> str:
+        loop = asyncio.get_running_loop()
+
+        async with self._lock:
+            if self._waiting is None:
+                room = await self.manager.create_room()
+                future: asyncio.Future[str] = loop.create_future()
+                room_id = room.room_id
+                self._waiting = (room_id, future)
+            else:
+                room_id, future = self._waiting
+                self._waiting = None
+                if not future.done():
+                    future.set_result(room_id)
+                return room_id
+
+        try:
+            return await future
+        except asyncio.CancelledError:
+            async with self._lock:
+                if (
+                    self._waiting is not None
+                    and self._waiting[0] == room_id
+                    and self._waiting[1] is future
+                    and not future.done()
+                ):
+                    self._waiting = None
+                    future.cancel()
+            await self.manager.remove_room(room_id)
+            raise
+
+
 BASE_DIR = Path(__file__).resolve().parent
 
 config = GameConfig.from_file(BASE_DIR / "totetris.ini")
 manager = GameManager(config)
+matchmaker = RandomMatchmaker(manager)
 
 app = FastAPI(title="Totetris")
 
@@ -731,7 +774,11 @@ INDEX_HTML = """
     .play-button { padding: 1.1rem 2.75rem; font-size: 1.25rem; border-radius: 999px; border: none; cursor: pointer; background: linear-gradient(135deg, #38bdf8, #818cf8); color: #0f172a; font-weight: 700; box-shadow: 0 20px 40px rgba(56, 189, 248, 0.35); transition: transform 0.2s ease, box-shadow 0.2s ease; }
     .play-button:hover { transform: translateY(-2px); box-shadow: 0 24px 50px rgba(56, 189, 248, 0.45); }
     .play-button:disabled { opacity: 0.6; cursor: wait; box-shadow: none; }
+    .cta-buttons { display: flex; flex-wrap: wrap; justify-content: center; gap: 1rem; }
+    .random-button { background: linear-gradient(135deg, #f97316, #fb7185); box-shadow: 0 20px 40px rgba(251, 113, 133, 0.35); }
+    .random-button:hover { transform: translateY(-2px); box-shadow: 0 24px 50px rgba(251, 113, 133, 0.45); }
     .note { font-size: 0.95rem; color: #94a3b8; margin: 0; line-height: 1.5; }
+    .hidden { display: none !important; }
   </style>
 </head>
 <body>
@@ -767,17 +814,27 @@ INDEX_HTML = """
         </article>
       </div>
     </section>
-    <button id=\"play\" class=\"play-button\">Сыграть с другом</button>
+    <div class=\"cta-buttons\">
+      <button id=\"play\" class=\"play-button\">Сыграть с другом</button>
+      <button id=\"random\" class=\"play-button random-button\">Случайный соперник</button>
+    </div>
+    <p id=\"random-status\" class=\"note hidden\">Ожидаем соперника</p>
     <p class=\"note\">Управление: стрелки &larr; &rarr; — движение, стрелка вверх — замедление в 3 раза, стрелка вниз — ускорение в 3 раза, пробел — поворот.</p>
   </main>
   <script>
     const playButton = document.getElementById('play');
+    const randomButton = document.getElementById('random');
+    const randomStatus = document.getElementById('random-status');
 
     async function startGame() {
       if (playButton.disabled) return;
       const originalText = playButton.textContent;
+      const randomWasDisabled = randomButton.disabled;
       playButton.disabled = true;
       playButton.textContent = 'Создание комнаты...';
+      if (!randomWasDisabled) {
+        randomButton.disabled = true;
+      }
       try {
         const response = await fetch('/api/create', { method: 'POST' });
         if (!response.ok) {
@@ -789,10 +846,41 @@ INDEX_HTML = """
         alert('Не удалось создать игру. Попробуйте ещё раз.');
         playButton.disabled = false;
         playButton.textContent = originalText;
+        if (!randomWasDisabled) {
+          randomButton.disabled = false;
+        }
+      }
+    }
+
+    async function findRandomOpponent() {
+      if (randomButton.disabled) return;
+      const originalText = randomButton.textContent;
+      randomButton.disabled = true;
+      playButton.disabled = true;
+      randomButton.textContent = 'Поиск соперника...';
+      randomStatus.textContent = 'Ожидаем соперника';
+      randomStatus.classList.remove('hidden');
+      try {
+        const response = await fetch('/api/random', { method: 'POST' });
+        if (!response.ok) {
+          throw new Error('failed');
+        }
+        const data = await response.json();
+        window.location.href = `/game/${data.room}`;
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          return;
+        }
+        alert('Не удалось найти соперника. Попробуйте ещё раз.');
+        randomButton.disabled = false;
+        playButton.disabled = false;
+        randomButton.textContent = originalText;
+        randomStatus.classList.add('hidden');
       }
     }
 
     playButton.addEventListener('click', startGame);
+    randomButton.addEventListener('click', findRandomOpponent);
   </script>
 </body>
 </html>
@@ -1457,6 +1545,15 @@ GAME_HTML = """
 async def api_create() -> JSONResponse:
     room = await manager.create_room()
     return JSONResponse({"room": room.room_id})
+
+
+@app.post("/api/random")
+async def api_random() -> JSONResponse:
+    try:
+        room_id = await matchmaker.join()
+    except asyncio.CancelledError as exc:
+        raise HTTPException(status_code=499, detail="client closed request") from exc
+    return JSONResponse({"room": room_id})
 
 
 @app.get("/")

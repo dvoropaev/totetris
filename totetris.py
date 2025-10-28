@@ -30,18 +30,29 @@ class GameConfig:
     tick_ms: int = 500
     countdown: int = 5
     game_duration: int = 300
+    end_on_negative_score: bool = True
 
     @classmethod
     def from_file(cls, path: Path) -> "GameConfig":
         parser = configparser.ConfigParser()
         parser.read(path)
         section = parser["game"] if parser.has_section("game") else {}
+
+        def get_bool(key: str, default: bool) -> bool:
+            if key not in section:
+                return default
+            value = str(section.get(key, str(default))).strip().lower()
+            return value in {"1", "true", "yes", "on"}
+
         return cls(
             width=int(section.get("width", cls.width)),
             height=int(section.get("height", cls.height)),
             tick_ms=int(section.get("tick_ms", cls.tick_ms)),
             countdown=int(section.get("countdown", cls.countdown)),
             game_duration=int(section.get("game_duration", cls.game_duration)),
+            end_on_negative_score=get_bool(
+                "end_on_negative_score", cls.end_on_negative_score
+            ),
         )
 
 
@@ -278,14 +289,16 @@ class GameRoom:
         if not self.spawn_piece(player):
             self.apply_penalty_and_reset(player)
             return
-        if player.score < 0:
-            self.finish_game(winner=self.opponent_id(player.pid), reason="negative_score")
+        if self.config.end_on_negative_score and player.score < 0:
+            self.finish_game(
+                winner=self.opponent_id(player.pid), reason="negative_score"
+            )
 
     def apply_penalty_and_reset(
         self, offender: PlayerState, *, highlight_zone: bool = False
     ) -> None:
         offender.score -= 10
-        if offender.score < 0:
+        if self.config.end_on_negative_score and offender.score < 0:
             self.finish_game(
                 winner=self.opponent_id(offender.pid), reason="negative_score"
             )

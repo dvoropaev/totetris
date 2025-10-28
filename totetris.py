@@ -141,6 +141,7 @@ class GameRoom:
         self.lock = asyncio.Lock()
         self.finished_reason: Optional[str] = None
         self.winner: Optional[str] = None
+        self.last_cleared_lines: List[int] = []
 
     # ------------------------- utility methods -------------------------
 
@@ -178,6 +179,7 @@ class GameRoom:
             "players": self.serialize_players(),
             "winner": self.winner,
             "reason": self.finished_reason,
+            "cleared_lines": list(self.last_cleared_lines),
         }
 
     def piece_rotations(self, kind: str) -> List[List[Tuple[int, int]]]:
@@ -257,8 +259,9 @@ class GameRoom:
                 self.board[y][x] = player.pid
         player.piece = None
         cleared = self.clear_full_lines()
+        self.last_cleared_lines = cleared
         if cleared:
-            player.score += cleared
+            player.score += len(cleared)
         if self.board_overflowed():
             self.apply_penalty_and_reset(player)
             return
@@ -283,16 +286,17 @@ class GameRoom:
                 participant.next_queue.extend(self.generate_bag())
             self.spawn_piece(participant)
 
-    def clear_full_lines(self) -> int:
-        removed = 0
+    def clear_full_lines(self) -> List[int]:
+        removed: List[int] = []
         y = self.height - 1
         while y >= 0:
             if all(self.board[y][x] is not None for x in range(self.width)):
-                removed += 1
+                removed.append(y)
                 del self.board[y]
                 self.board.insert(0, [None for _ in range(self.width)])
             else:
                 y -= 1
+        removed.sort()
         return removed
 
     def board_overflowed(self) -> bool:
@@ -464,6 +468,7 @@ class GameRoom:
                 await websocket.send_text(payload)
             except RuntimeError:
                 continue
+        self.last_cleared_lines = []
 
     async def handle_message(self, pid: str, data: Dict[str, object]) -> None:
         player = self.players[pid]
@@ -714,6 +719,7 @@ GAME_HTML = """
   <script>
     const roomId = "{room_id}";
     const CELL_SIZE = 20;
+    const CLEAR_ANIMATION_DURATION = 480;
     const canvas = document.getElementById('board');
     const ctx = canvas.getContext('2d');
     const statusEl = document.getElementById('status');
@@ -744,6 +750,9 @@ GAME_HTML = """
 
     let ws = null;
     let you = null;
+    let currentState = null;
+    let animationFrame = null;
+    let clearAnimation = null;
 
     function copyInviteLink(target) {
       const originalText = target.textContent;
@@ -799,7 +808,29 @@ GAME_HTML = """
       });
     }
 
-    function drawBoard(board, players) {
+    function scheduleRender() {
+      if (animationFrame === null) {
+        animationFrame = requestAnimationFrame(render);
+      }
+    }
+
+    function render(timestamp) {
+      animationFrame = null;
+      if (!currentState) return;
+      let animation = null;
+      if (clearAnimation) {
+        const progress = Math.min((timestamp - clearAnimation.start) / CLEAR_ANIMATION_DURATION, 1);
+        animation = { lines: clearAnimation.lines, progress };
+        if (progress < 1) {
+          animationFrame = requestAnimationFrame(render);
+        } else {
+          clearAnimation = null;
+        }
+      }
+      drawBoard(currentState.board, currentState.players, animation);
+    }
+
+    function drawBoard(board, players, animation) {
       const rows = board.length;
       const cols = board[0].length;
       canvas.width = cols * CELL_SIZE;
@@ -837,6 +868,64 @@ GAME_HTML = """
           ctx.fillRect(x * CELL_SIZE + 1, y * CELL_SIZE + 1, CELL_SIZE - 2, CELL_SIZE - 2);
         }
         ctx.globalAlpha = 1;
+      }
+
+      if (animation && Array.isArray(animation.lines) && animation.lines.length > 0) {
+        const progress = Math.min(Math.max(animation.progress ?? 0, 0), 1);
+        const fade = Math.sin(Math.PI * progress);
+        ctx.save();
+        animation.lines.forEach((line) => {
+          if (line < 0 || line >= rows) {
+            return;
+          }
+          const top = line * CELL_SIZE;
+          const centerY = top + CELL_SIZE / 2;
+
+          ctx.save();
+          ctx.globalAlpha = 0.65 * (1 - progress * 0.8);
+          const gradient = ctx.createLinearGradient(0, top, canvas.width, top + CELL_SIZE);
+          gradient.addColorStop(0, 'rgba(56,189,248,0)');
+          gradient.addColorStop(0.5, `rgba(248,250,252,${0.8 * (1 - progress)})`);
+          gradient.addColorStop(1, 'rgba(56,189,248,0)');
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, top, canvas.width, CELL_SIZE);
+          ctx.restore();
+
+          ctx.save();
+          const collapse = Math.min(progress * 1.05, 1);
+          const beamWidth = canvas.width * (1 - 0.55 * collapse);
+          const beamHeight = CELL_SIZE * (1 - 0.6 * collapse);
+          ctx.translate(canvas.width / 2, centerY);
+          ctx.rotate((Math.PI / 32) * (1 - collapse));
+          ctx.fillStyle = `rgba(148,163,184,${0.38 * (1 - collapse)})`;
+          ctx.fillRect(-beamWidth / 2, -beamHeight / 2, beamWidth, beamHeight);
+          ctx.fillStyle = `rgba(226,232,240,${0.75 * (1 - collapse)})`;
+          ctx.fillRect(-beamWidth / 4, -beamHeight / 2, beamWidth / 2, beamHeight);
+          ctx.restore();
+
+          const sparkleCount = 5;
+          for (let i = 0; i < sparkleCount; i++) {
+            const t = (i + 1) / (sparkleCount + 1);
+            const x = canvas.width * t;
+            const size = CELL_SIZE * (0.3 - 0.2 * progress);
+            if (size <= 0) continue;
+            ctx.save();
+            ctx.translate(x, centerY);
+            ctx.rotate((Math.PI / 2) * progress + i * 0.12);
+            ctx.globalAlpha = 0.5 * (1 - progress);
+            ctx.fillStyle = '#e0f2fe';
+            ctx.fillRect(-size / 2, -size / 2, size, size);
+            ctx.restore();
+          }
+
+          ctx.save();
+          ctx.globalAlpha = 0.35 * fade;
+          const inset = CELL_SIZE * 0.45 * progress;
+          ctx.fillStyle = '#0f172a';
+          ctx.fillRect(0, top + inset, canvas.width, CELL_SIZE - inset * 2);
+          ctx.restore();
+        });
+        ctx.restore();
       }
     }
 
@@ -878,7 +967,11 @@ GAME_HTML = """
     }
 
     function updateUI(state) {
-      drawBoard(state.board, state.players);
+      currentState = state;
+      if (Array.isArray(state.cleared_lines) && state.cleared_lines.length > 0) {
+        clearAnimation = { lines: state.cleared_lines, start: performance.now() };
+      }
+      scheduleRender();
       statusEl.textContent = formatStatus(state);
       timerEl.textContent = formatTimer(state);
       restartButton.disabled = state.status !== 'finished';

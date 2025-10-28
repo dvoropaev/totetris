@@ -66,6 +66,8 @@ class PlayerState:
     next_queue: List[str] = field(default_factory=list)
     soft_drop: bool = False
     connected: bool = False
+    speed_multiplier: float = 1.0
+    fall_progress: float = 0.0
 
 
 TETROMINOES: Dict[str, List[List[Tuple[int, int]]]] = {
@@ -250,6 +252,7 @@ class GameRoom:
                 candidate = ActivePiece(kind, rotation_index, x, anchor_y)
                 if self.can_place(candidate, owner=player.pid):
                     player.piece = candidate
+                    player.fall_progress = 0.0
                     return True
         player.piece = None
         return False
@@ -268,6 +271,7 @@ class GameRoom:
             if 0 <= y < self.height and 0 <= x < self.width:
                 self.board[y][x] = player.pid
         player.piece = None
+        player.fall_progress = 0.0
         cleared = self.clear_full_lines()
         self.last_cleared_lines = cleared
         if cleared:
@@ -295,6 +299,8 @@ class GameRoom:
         for participant in self.players.values():
             participant.piece = None
             participant.soft_drop = False
+            participant.speed_multiplier = 1.0
+            participant.fall_progress = 0.0
             if not participant.next_queue:
                 participant.next_queue.extend(self.generate_bag())
             self.spawn_piece(participant)
@@ -335,6 +341,7 @@ class GameRoom:
     def soft_drop_piece(self, player: PlayerState) -> None:
         if not player.piece:
             return
+        player.fall_progress = 0.0
         while True:
             next_piece = ActivePiece(
                 player.piece.kind, player.piece.rotation, player.piece.x, player.piece.y + 1
@@ -348,11 +355,25 @@ class GameRoom:
                 self.lock_piece(player)
                 break
 
+    def set_speed_multiplier(self, player: PlayerState, multiplier: float) -> None:
+        try:
+            value = float(multiplier)
+        except (TypeError, ValueError):
+            return
+        player.speed_multiplier = max(0.1, min(value, 5.0))
+
     def tick_player(self, player: PlayerState) -> None:
         if not player.piece:
             return
-        steps = 2 if player.soft_drop else 1
-        player.soft_drop = False
+        multiplier = max(player.speed_multiplier, 0.1)
+        player.fall_progress += multiplier
+        if player.soft_drop:
+            player.fall_progress += 1.0
+            player.soft_drop = False
+        steps = int(player.fall_progress)
+        player.fall_progress -= steps
+        if steps <= 0:
+            return
         for _ in range(steps):
             next_piece = ActivePiece(
                 player.piece.kind, player.piece.rotation, player.piece.x, player.piece.y + 1
@@ -378,6 +399,9 @@ class GameRoom:
                 raise HTTPException(status_code=400, detail="Room already has two players")
             player = self.players[pid]
             player.connected = True
+            player.speed_multiplier = 1.0
+            player.fall_progress = 0.0
+            player.soft_drop = False
             if not player.next_queue:
                 player.next_queue.extend(self.generate_bag())
             if not player.piece:
@@ -392,6 +416,9 @@ class GameRoom:
             player = self.players.get(pid)
             if player:
                 player.connected = False
+                player.speed_multiplier = 1.0
+                player.fall_progress = 0.0
+                player.soft_drop = False
             for index, (ws, owner) in enumerate(list(self.connections)):
                 if ws is websocket and owner == pid:
                     del self.connections[index]
@@ -505,6 +532,8 @@ class GameRoom:
             player.soft_drop = True
         elif action == "slam":
             self.soft_drop_piece(player)
+        elif action == "speed":
+            self.set_speed_multiplier(player, data.get("multiplier", 1))
         await self.broadcast_state()
 
     async def restart(self) -> None:
@@ -514,6 +543,8 @@ class GameRoom:
             player.soft_drop = False
             player.next_queue.clear()
             player.piece = None
+            player.speed_multiplier = 1.0
+            player.fall_progress = 0.0
             player.next_queue.extend(self.generate_bag())
             self.spawn_piece(player)
         self.status = "waiting"
@@ -630,7 +661,7 @@ INDEX_HTML = """
       </div>
     </section>
     <button id=\"play\" class=\"play-button\">Сыграть с другом</button>
-    <p class=\"note\">Управление: стрелки &larr; &rarr; — движение, стрелка вниз — ускорение, пробел — поворот, Shift — мгновенный дроп.</p>
+    <p class=\"note\">Управление: стрелки &larr; &rarr; — движение, стрелка вверх — замедление в 3 раза, стрелка вниз — ускорение в 3 раза, пробел — поворот.</p>
   </main>
   <script>
     const playButton = document.getElementById('play');
@@ -1120,8 +1151,25 @@ GAME_HTML = """
       ws.send(JSON.stringify({ action, ...data }));
     }
 
+    const SPEED_FAST = 3;
+    const SPEED_SLOW = 1 / 3;
+    const speedState = { slow: false, fast: false, current: 1 };
+
+    function updateSpeed() {
+      let multiplier = 1;
+      if (speedState.fast && !speedState.slow) {
+        multiplier = SPEED_FAST;
+      } else if (speedState.slow && !speedState.fast) {
+        multiplier = SPEED_SLOW;
+      }
+      if (speedState.current !== multiplier) {
+        speedState.current = multiplier;
+        sendAction('speed', { multiplier });
+      }
+    }
+
     document.addEventListener('keydown', (event) => {
-      if (['ArrowLeft', 'ArrowRight', 'ArrowDown', 'Space', 'ShiftLeft', 'ShiftRight'].includes(event.code)) {
+      if (['ArrowLeft', 'ArrowRight', 'ArrowDown', 'ArrowUp', 'Space'].includes(event.code)) {
         event.preventDefault();
       }
       switch (event.code) {
@@ -1132,14 +1180,36 @@ GAME_HTML = """
           sendAction('move', { direction: 'right' });
           break;
         case 'ArrowDown':
-          sendAction('drop');
+          if (!speedState.fast) {
+            speedState.fast = true;
+            updateSpeed();
+          }
+          break;
+        case 'ArrowUp':
+          if (!speedState.slow) {
+            speedState.slow = true;
+            updateSpeed();
+          }
           break;
         case 'Space':
           sendAction('rotate');
           break;
-        case 'ShiftLeft':
-        case 'ShiftRight':
-          sendAction('slam');
+      }
+    });
+
+    document.addEventListener('keyup', (event) => {
+      switch (event.code) {
+        case 'ArrowDown':
+          if (speedState.fast) {
+            speedState.fast = false;
+            updateSpeed();
+          }
+          break;
+        case 'ArrowUp':
+          if (speedState.slow) {
+            speedState.slow = false;
+            updateSpeed();
+          }
           break;
       }
     });

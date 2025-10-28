@@ -125,9 +125,11 @@ DANGER_ZONE_ROWS = 3
 PENALTY_PAUSE_SECONDS = 1.0
 
 
+ROOM_ID_ALPHABET = string.ascii_lowercase + string.digits
+
+
 def generate_room_id(length: int = 6) -> str:
-    alphabet = string.ascii_lowercase + string.digits
-    return "".join(random.choice(alphabet) for _ in range(length))
+    return "".join(random.choice(ROOM_ID_ALPHABET) for _ in range(length))
 
 
 # ---------------------------------------------------------------------------
@@ -664,13 +666,21 @@ class GameManager:
 
     async def create_room(self) -> GameRoom:
         async with self.lock:
-            for _ in range(5):
-                room_id = generate_room_id()
+            length = 6
+            attempts = 0
+            while True:
+                room_id = generate_room_id(length)
+                attempts += 1
                 if room_id not in self.rooms:
                     room = GameRoom(room_id, self.config)
                     self.rooms[room_id] = room
                     return room
-        raise RuntimeError("Unable to create room id")
+                # If the namespace is saturated or we keep failing to find a
+                # unique identifier, expand the room id length to keep room
+                # creation effectively unbounded.
+                if len(self.rooms) >= len(ROOM_ID_ALPHABET) ** length or attempts >= 50:
+                    length += 1
+                    attempts = 0
 
     async def get_room(self, room_id: str) -> GameRoom:
         async with self.lock:

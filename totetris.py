@@ -9,6 +9,7 @@ import json
 import os
 import random
 import string
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -121,6 +122,7 @@ TETROMINOES: Dict[str, List[List[Tuple[int, int]]]] = {
 PLAYER_COLORS = {"p1": "#70c1ff", "p2": "#ff6b6b"}
 
 DANGER_ZONE_ROWS = 3
+PENALTY_PAUSE_SECONDS = 1.0
 
 
 def generate_room_id(length: int = 6) -> str:
@@ -160,6 +162,8 @@ class GameRoom:
         self.penalty_event_counter: int = 0
         self.last_penalty_event: Optional[Dict[str, object]] = None
         self.penalty_event_dirty: bool = False
+        self.penalty_pause_until: Optional[float] = None
+        self.pending_penalty_reset: Optional[asyncio.Task] = None
 
     # ------------------------- utility methods -------------------------
 
@@ -288,7 +292,9 @@ class GameRoom:
         if cleared:
             player.score += len(cleared)
         if touched_danger_zone:
-            self.apply_penalty_and_reset(player, highlight_zone=True)
+            self.apply_penalty_and_reset(
+                player, highlight_zone=True, blink_cells=placed_cells
+            )
             return
         if not self.spawn_piece(player):
             self.apply_penalty_and_reset(player)
@@ -299,7 +305,11 @@ class GameRoom:
             )
 
     def apply_penalty_and_reset(
-        self, offender: PlayerState, *, highlight_zone: bool = False
+        self,
+        offender: PlayerState,
+        *,
+        highlight_zone: bool = False,
+        blink_cells: Optional[List[Tuple[int, int]]] = None,
     ) -> None:
         offender.score -= 10
         if self.config.end_on_negative_score and offender.score < 0:
@@ -307,23 +317,18 @@ class GameRoom:
                 winner=self.opponent_id(offender.pid), reason="negative_score"
             )
             return
-        self.reset_board()
-        self.last_cleared_lines = []
-        for participant in self.players.values():
-            participant.piece = None
-            participant.soft_drop = False
-            participant.speed_multiplier = 1.0
-            participant.fall_progress = 0.0
-            if not participant.next_queue:
-                participant.next_queue.extend(self.generate_bag())
-            self.spawn_piece(participant)
-        self.penalty_event_counter += 1
-        self.last_penalty_event = {
-            "id": self.penalty_event_counter,
-            "player": offender.pid,
-            "highlight_zone": highlight_zone,
-        }
-        self.penalty_event_dirty = True
+        pause_ms = int(PENALTY_PAUSE_SECONDS * 1000) if highlight_zone else 0
+        self._record_penalty_event(
+            offender.pid,
+            highlight_zone=highlight_zone,
+            blink_cells=blink_cells,
+            pause_ms=pause_ms,
+        )
+        if highlight_zone:
+            self._start_penalty_pause(delay=PENALTY_PAUSE_SECONDS)
+        else:
+            self._cancel_pending_penalty_reset()
+            self._complete_penalty_reset()
 
     def clear_full_lines(self) -> List[int]:
         removed: List[int] = []
@@ -340,6 +345,80 @@ class GameRoom:
 
     def opponent_id(self, pid: str) -> Optional[str]:
         return "p2" if pid == "p1" else "p1" if pid == "p2" else None
+
+    def _record_penalty_event(
+        self,
+        player_id: str,
+        *,
+        highlight_zone: bool,
+        blink_cells: Optional[List[Tuple[int, int]]],
+        pause_ms: int,
+    ) -> None:
+        self.penalty_event_counter += 1
+        event: Dict[str, object] = {
+            "id": self.penalty_event_counter,
+            "player": player_id,
+            "highlight_zone": highlight_zone,
+        }
+        if highlight_zone and blink_cells:
+            event["blink_cells"] = list(blink_cells)
+            if pause_ms > 0:
+                event["pause_ms"] = pause_ms
+        elif pause_ms > 0:
+            event["pause_ms"] = pause_ms
+        self.last_penalty_event = event
+        self.penalty_event_dirty = True
+
+    def _cancel_pending_penalty_reset(self) -> None:
+        if self.pending_penalty_reset:
+            self.pending_penalty_reset.cancel()
+            self.pending_penalty_reset = None
+        self.penalty_pause_until = None
+
+    def _start_penalty_pause(self, *, delay: float) -> None:
+        self._cancel_pending_penalty_reset()
+        self.penalty_pause_until = time.monotonic() + delay
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self.penalty_pause_until = None
+            self._complete_penalty_reset()
+            return
+        self.pending_penalty_reset = loop.create_task(self._delayed_penalty_reset(delay))
+
+    async def _delayed_penalty_reset(self, delay: float) -> None:
+        try:
+            await asyncio.sleep(delay)
+            async with self.lock:
+                self._complete_penalty_reset()
+                self.penalty_pause_until = None
+        except asyncio.CancelledError:
+            return
+        finally:
+            self.pending_penalty_reset = None
+        await self.broadcast_state()
+
+    def _complete_penalty_reset(self) -> None:
+        self.reset_board()
+        self.last_cleared_lines = []
+        for participant in self.players.values():
+            participant.piece = None
+            participant.soft_drop = False
+            participant.speed_multiplier = 1.0
+            participant.fall_progress = 0.0
+            if not participant.next_queue:
+                participant.next_queue.extend(self.generate_bag())
+            self.spawn_piece(participant)
+
+    def penalty_pause_active(self) -> bool:
+        if self.penalty_pause_until is None:
+            return False
+        if time.monotonic() < self.penalty_pause_until:
+            return True
+        if self.pending_penalty_reset and not self.pending_penalty_reset.done():
+            return True
+        self.penalty_pause_until = None
+        return False
 
     def move_piece(self, player: PlayerState, dx: int, dy: int, rotate: int = 0) -> None:
         if not player.piece:
@@ -468,8 +547,9 @@ class GameRoom:
         try:
             while self.status == "running":
                 async with self.lock:
-                    for player in self.players.values():
-                        self.tick_player(player)
+                    if not self.penalty_pause_active():
+                        for player in self.players.values():
+                            self.tick_player(player)
                 await self.broadcast_state()
                 await asyncio.sleep(interval)
         except asyncio.CancelledError:
@@ -501,6 +581,7 @@ class GameRoom:
         self.status = "finished"
         self.winner = winner
         self.finished_reason = reason
+        self._cancel_pending_penalty_reset()
         if self.loop_task:
             self.loop_task.cancel()
             self.loop_task = None
@@ -533,6 +614,8 @@ class GameRoom:
             if action == "restart" and self.status == "finished":
                 await self.restart()
             return
+        if self.penalty_pause_active():
+            return
         if action == "move":
             direction = data.get("direction")
             if direction == "left":
@@ -550,6 +633,7 @@ class GameRoom:
         await self.broadcast_state()
 
     async def restart(self) -> None:
+        self._cancel_pending_penalty_reset()
         self.reset_board()
         for player in self.players.values():
             player.score = 0
@@ -783,6 +867,8 @@ GAME_HTML = """
     const DANGER_ZONE_ROWS = 3;
     const DANGER_FLASH_DURATION = 1000;
     const BOARD_RESET_DURATION = 900;
+    const PENALTY_BLINK_BASE_DURATION = 1000;
+    const PENALTY_BLINK_FREQUENCY = 9;
     const canvas = document.getElementById('board');
     const ctx = canvas.getContext('2d');
     const statusEl = document.getElementById('status');
@@ -817,6 +903,7 @@ GAME_HTML = """
     let animationFrame = null;
     let clearAnimation = null;
     let penaltyFlash = null;
+    let penaltyBlink = null;
     let boardResetAnimation = null;
     let lastPenaltyEventId = 0;
 
@@ -905,13 +992,46 @@ GAME_HTML = """
           penaltyFlash = null;
         }
       }
-      if (boardResetAnimation) {
-        const elapsed = now - boardResetAnimation.start;
-        if (elapsed < BOARD_RESET_DURATION) {
-          effects.boardClear = { progress: elapsed / BOARD_RESET_DURATION };
+      if (penaltyBlink) {
+        const duration = Math.max(
+          penaltyBlink.duration ?? PENALTY_BLINK_BASE_DURATION,
+          0
+        );
+        const effectiveDuration = duration > 0 ? duration : PENALTY_BLINK_BASE_DURATION;
+        const elapsed = now - penaltyBlink.start;
+        if (elapsed < effectiveDuration) {
+          const seconds = elapsed / 1000;
+          const flash = Math.pow(
+            Math.sin(2 * Math.PI * PENALTY_BLINK_FREQUENCY * seconds),
+            2
+          );
+          const progress = Math.min(elapsed / effectiveDuration, 1);
+          effects.blink = {
+            cells: penaltyBlink.cells,
+            player: penaltyBlink.player,
+            flash,
+            progress,
+          };
           needsMoreFrames = true;
         } else {
-          boardResetAnimation = null;
+          penaltyBlink = null;
+        }
+      }
+      if (boardResetAnimation) {
+        const delay = Math.max(boardResetAnimation.delay ?? 0, 0);
+        const elapsed = now - boardResetAnimation.start;
+        if (elapsed < delay) {
+          needsMoreFrames = true;
+        } else {
+          const waveElapsed = elapsed - delay;
+          if (waveElapsed < BOARD_RESET_DURATION) {
+            effects.boardClear = {
+              progress: waveElapsed / BOARD_RESET_DURATION,
+            };
+            needsMoreFrames = true;
+          } else {
+            boardResetAnimation = null;
+          }
         }
       }
       drawBoard(currentState.board, currentState.players, animation, effects);
@@ -930,6 +1050,7 @@ GAME_HTML = """
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       const dangerFlash = effects.dangerFlash;
+      const blinking = effects.blink;
       let dangerAlpha = 0.12;
       if (dangerFlash) {
         const t = Math.min(Math.max(dangerFlash.progress, 0), 1);
@@ -971,6 +1092,62 @@ GAME_HTML = """
           ctx.fillStyle = players[pid].color;
           ctx.fillRect(x * CELL_SIZE + 1, y * CELL_SIZE + 1, CELL_SIZE - 2, CELL_SIZE - 2);
         }
+      }
+
+      if (
+        blinking &&
+        Array.isArray(blinking.cells) &&
+        blinking.cells.length > 0
+      ) {
+        const flash = Math.min(Math.max(blinking.flash ?? 0, 0), 1);
+        const progress = Math.min(Math.max(blinking.progress ?? 0, 0), 1);
+        const offenderColor =
+          (blinking.player && players[blinking.player]?.color) || '#f87171';
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = 0.45 + 0.45 * flash;
+        ctx.fillStyle = offenderColor;
+        blinking.cells.forEach((cell) => {
+          const [cx, cy] = cell;
+          if (typeof cx !== 'number' || typeof cy !== 'number') return;
+          if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) return;
+          ctx.fillRect(cx * CELL_SIZE + 1, cy * CELL_SIZE + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+        });
+        ctx.restore();
+
+        const innerInset = CELL_SIZE * (0.2 + 0.15 * (1 - progress));
+        ctx.save();
+        ctx.globalAlpha = 0.35 + 0.55 * flash;
+        ctx.fillStyle = '#f8fafc';
+        blinking.cells.forEach((cell) => {
+          const [cx, cy] = cell;
+          if (typeof cx !== 'number' || typeof cy !== 'number') return;
+          if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) return;
+          ctx.fillRect(
+            cx * CELL_SIZE + innerInset,
+            cy * CELL_SIZE + innerInset,
+            CELL_SIZE - innerInset * 2,
+            CELL_SIZE - innerInset * 2
+          );
+        });
+        ctx.restore();
+
+        ctx.save();
+        ctx.globalAlpha = 0.55 + 0.4 * flash;
+        ctx.strokeStyle = '#fef2f2';
+        ctx.lineWidth = 2;
+        blinking.cells.forEach((cell) => {
+          const [cx, cy] = cell;
+          if (typeof cx !== 'number' || typeof cy !== 'number') return;
+          if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) return;
+          ctx.strokeRect(
+            cx * CELL_SIZE + 1.5,
+            cy * CELL_SIZE + 1.5,
+            CELL_SIZE - 3,
+            CELL_SIZE - 3
+          );
+        });
+        ctx.restore();
       }
 
       for (const pid of Object.keys(players)) {
@@ -1126,9 +1303,37 @@ GAME_HTML = """
         if (state.penalty_event.id !== lastPenaltyEventId) {
           lastPenaltyEventId = state.penalty_event.id;
           const now = performance.now();
-          boardResetAnimation = { start: now };
+          const pause = typeof state.penalty_event.pause_ms === 'number'
+            ? Math.max(state.penalty_event.pause_ms, 0)
+            : 0;
+          boardResetAnimation = { start: now, delay: pause };
           if (state.penalty_event.highlight_zone) {
             penaltyFlash = { start: now };
+            const blinkCells = Array.isArray(state.penalty_event.blink_cells)
+              ? state.penalty_event.blink_cells
+              : [];
+            const duration = pause > 0 ? pause : PENALTY_BLINK_BASE_DURATION;
+            if (blinkCells.length > 0) {
+              penaltyBlink = {
+                start: now,
+                cells: blinkCells.map((cell) =>
+                  Array.isArray(cell) ? [...cell] : cell
+                ),
+                duration,
+                player: state.penalty_event.player || null,
+              };
+            } else if (pause > 0) {
+              penaltyBlink = {
+                start: now,
+                cells: [],
+                duration,
+                player: state.penalty_event.player || null,
+              };
+            } else {
+              penaltyBlink = null;
+            }
+          } else {
+            penaltyBlink = null;
           }
         }
       }

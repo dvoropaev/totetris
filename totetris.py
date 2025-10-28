@@ -30,6 +30,7 @@ class GameConfig:
     tick_ms: int = 500
     countdown: int = 5
     game_duration: int = 300
+    overflow_ends_game: bool = False
 
     @classmethod
     def from_file(cls, path: Path) -> "GameConfig":
@@ -42,6 +43,9 @@ class GameConfig:
             tick_ms=int(section.get("tick_ms", cls.tick_ms)),
             countdown=int(section.get("countdown", cls.countdown)),
             game_duration=int(section.get("game_duration", cls.game_duration)),
+            overflow_ends_game=section.getboolean(
+                "overflow_ends_game", fallback=cls.overflow_ends_game
+            ),
         )
 
 
@@ -263,7 +267,12 @@ class GameRoom:
         if cleared:
             player.score += len(cleared)
         if self.board_overflowed():
-            self.apply_penalty_and_reset(player)
+            if self.config.overflow_ends_game:
+                self.finish_game(
+                    winner=self.opponent_id(player.pid), reason="overflow"
+                )
+            else:
+                self.apply_penalty_and_reset(player)
             return
         if not self.spawn_piece(player):
             self.apply_penalty_and_reset(player)

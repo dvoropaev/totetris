@@ -27,7 +27,7 @@ import uvicorn
 class GameConfig:
     width: int = 20
     height: int = 30
-    tick_ms: int = 500
+    tick_ms: int = 300
     countdown: int = 5
     game_duration: int = 300
 

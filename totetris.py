@@ -1265,19 +1265,36 @@ GAME_HTML = """
     main { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 2rem 1rem; gap: 1.5rem; min-height: 100vh; box-sizing: border-box; }
     h1 { margin: 0; }
     #board { background: #1e293b; border: 2px solid #334155; border-radius: 0.5rem; box-shadow: 0 12px 40px rgba(15,23,42,0.35); }
-    .game-area { display: flex; flex-direction: column; align-items: center; gap: 1.25rem; }
+    .game-area { display: flex; flex-direction: column; align-items: center; gap: 1.75rem; }
     .game-area.hidden { display: none !important; }
-    .hud { display: flex; flex-wrap: wrap; gap: 1.5rem; justify-content: center; }
-    .panel { background: rgba(15, 23, 42, 0.75); padding: 1.25rem 1.5rem; border-radius: 0.75rem; min-width: 200px; box-shadow: 0 18px 45px rgba(15, 23, 42, 0.45); border: 1px solid rgba(148, 163, 184, 0.12); }
-    h2 { margin: 0 0 0.75rem 0; font-size: 1rem; }
-    .scores { list-style: none; padding: 0; margin: 0; }
-    .scores li { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
-    .badge { display: inline-block; width: 12px; height: 12px; border-radius: 999px; margin-right: 0.5rem; }
-    .status { font-weight: 600; }
+    .game-layout { display: grid; grid-template-columns: minmax(180px, 1fr) auto minmax(180px, 1fr); align-items: center; gap: 2rem; width: 100%; max-width: 960px; }
+    .board-wrapper { position: relative; display: flex; flex-direction: column; align-items: center; gap: 1rem; }
+    .board-shell { position: relative; }
+    .timer-display { min-height: 1.5rem; font-size: 1.25rem; font-weight: 600; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.06em; }
+    .player-card { --player-color: #38bdf8; background: rgba(15, 23, 42, 0.78); padding: 1.5rem 1.25rem; border-radius: 0.9rem; border: 1px solid rgba(148, 163, 184, 0.18); border-top: 4px solid var(--player-color); box-shadow: 0 20px 50px rgba(15, 23, 42, 0.45); display: flex; flex-direction: column; align-items: center; gap: 0.75rem; text-align: center; transition: transform 0.2s ease, box-shadow 0.2s ease; }
+    .player-card.you { box-shadow: 0 24px 60px rgba(56, 189, 248, 0.35); transform: translateY(-4px); }
+    .player-card.disconnected { opacity: 0.6; }
+    .player-name { font-size: 1.05rem; font-weight: 600; color: #e2e8f0; }
+    .player-score { font-size: 2.25rem; font-weight: 700; color: #f8fafc; line-height: 1; }
+    .status-text { font-weight: 600; min-height: 1.5rem; text-align: center; }
     .link { color: #38bdf8; cursor: pointer; }
-    .actions { display: flex; gap: 0.75rem; margin-top: 0.75rem; flex-wrap: wrap; }
+    .game-footer { display: flex; flex-direction: column; align-items: center; gap: 0.75rem; }
+    .game-actions { display: flex; gap: 1rem; align-items: center; justify-content: center; flex-wrap: wrap; }
     button { padding: 0.65rem 1.1rem; border-radius: 0.65rem; border: none; cursor: pointer; background: #38bdf8; color: #0f172a; font-weight: 600; }
     button:hover { background: #0ea5e9; }
+    .secondary-button { background: rgba(148, 163, 184, 0.25); color: #e2e8f0; }
+    .secondary-button:hover { background: rgba(148, 163, 184, 0.35); }
+    .result-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, 0.92); border-radius: 0.5rem; z-index: 10; padding: 2rem; text-align: center; backdrop-filter: blur(6px); }
+    .result-overlay.hidden { display: none; }
+    .result-box { display: flex; flex-direction: column; gap: 1rem; align-items: center; max-width: 320px; }
+    .result-title { font-size: 2rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+    .result-score { font-size: 1.4rem; font-weight: 600; }
+    .result-reason { font-size: 1rem; color: #cbd5f5; }
+    .result-actions { display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center; margin-top: 0.5rem; }
+    @media (max-width: 900px) {
+      .game-layout { grid-template-columns: 1fr; }
+      .player-card { width: min(280px, 100%); }
+    }
     .overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.94); display: flex; align-items: center; justify-content: center; padding: 2rem; z-index: 20; }
     .overlay.hidden { display: none; }
     .overlay-box { max-width: 440px; width: min(90vw, 440px); background: rgba(15, 23, 42, 0.88); border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 1rem; padding: 2.5rem 2rem; text-align: center; box-shadow: 0 30px 90px rgba(15, 23, 42, 0.65); }
@@ -1307,20 +1324,37 @@ GAME_HTML = """
   <main>
     <h1>Totetris</h1>
     <div id=\"game-area\" class=\"game-area hidden\">
-      <canvas id=\"board\" width=\"400\" height=\"600\"></canvas>
-      <div class=\"hud\">
-        <div class=\"panel\">
-          <h2>Статус</h2>
-          <div id=\"status\" class=\"status\"></div>
-          <div id=\"timer\"></div>
-          <div class=\"actions\">
-            <button id=\"restart\" disabled>Рестарт</button>
-            <a class=\"link\" id=\"invite\" target=\"_blank\">Скопировать ссылку</a>
+      <div class=\"game-layout\">
+        <div id=\"player-p1\" class=\"player-card\">
+          <div id=\"player-p1-name\" class=\"player-name\">Игрок 1</div>
+          <div id=\"player-p1-score\" class=\"player-score\">0</div>
+        </div>
+        <div class=\"board-wrapper\">
+          <div id=\"timer\" class=\"timer-display\"></div>
+          <div class=\"board-shell\">
+            <canvas id=\"board\" width=\"400\" height=\"600\"></canvas>
+            <div id=\"result-overlay\" class=\"result-overlay hidden\">
+              <div class=\"result-box\">
+                <div id=\"result-title\" class=\"result-title\">ПОБЕДА</div>
+                <div id=\"result-score\" class=\"result-score\">Счёт: 0 — 0</div>
+                <div id=\"result-reason\" class=\"result-reason\"></div>
+                <div class=\"result-actions\">
+                  <button id=\"result-home\" class=\"secondary-button\">Главная</button>
+                  <button id=\"result-rematch\">Реванш</button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-        <div class=\"panel\">
-          <h2>Счёт</h2>
-          <ul id=\"scores\" class=\"scores\"></ul>
+        <div id=\"player-p2\" class=\"player-card\">
+          <div id=\"player-p2-name\" class=\"player-name\">Игрок 2</div>
+          <div id=\"player-p2-score\" class=\"player-score\">0</div>
+        </div>
+      </div>
+      <div class=\"game-footer\">
+        <div id=\"status\" class=\"status-text\"></div>
+        <div class=\"game-actions\">
+          <a class=\"link\" id=\"invite\" target=\"_blank\">Скопировать ссылку</a>
         </div>
       </div>
     </div>
@@ -1371,10 +1405,26 @@ GAME_HTML = """
     const ctx = canvas.getContext('2d');
     const statusEl = document.getElementById('status');
     const timerEl = document.getElementById('timer');
-    const scoresEl = document.getElementById('scores');
-    const restartButton = document.getElementById('restart');
     const inviteLink = document.getElementById('invite');
     const inviteLinkDefaultText = inviteLink.textContent;
+    const playerElements = {
+      p1: {
+        root: document.getElementById('player-p1'),
+        name: document.getElementById('player-p1-name'),
+        score: document.getElementById('player-p1-score'),
+      },
+      p2: {
+        root: document.getElementById('player-p2'),
+        name: document.getElementById('player-p2-name'),
+        score: document.getElementById('player-p2-score'),
+      },
+    };
+    const resultOverlay = document.getElementById('result-overlay');
+    const resultTitle = document.getElementById('result-title');
+    const resultScore = document.getElementById('result-score');
+    const resultReason = document.getElementById('result-reason');
+    const resultHomeButton = document.getElementById('result-home');
+    const resultRematchButton = document.getElementById('result-rematch');
     const gameArea = document.getElementById('game-area');
     const overlay = document.getElementById('overlay');
     const overlayTitle = document.getElementById('overlay-title');
@@ -1896,23 +1946,37 @@ GAME_HTML = """
       }
     }
 
+    const FINISH_REASON_TEXT = {
+      time_up: 'время вышло',
+      disconnect: 'игрок вышел из игры',
+      negative_score: 'игрок ушел в минус',
+    };
+
     function formatStatus(state) {
       if (state.status === 'waiting') return 'Ждём соперника';
-      if (state.status === 'countdown') return `Старт через ${state.countdown} сек.`;
+      if (state.status === 'countdown') return 'Отсчёт перед стартом';
       if (state.status === 'running') return 'Игра идёт';
       if (state.status === 'finished') {
-        if (!state.winner) return 'Ничья!';
-        return state.winner === you ? 'Вы победили!' : 'Вы проиграли';
+        if (!state.winner) return 'Матч завершён: ничья';
+        return state.winner === you
+          ? 'Матч завершён: вы победили'
+          : 'Матч завершён: вы проиграли';
       }
-      return 'Неизвестно';
+      return '';
     }
 
     function formatTimer(state) {
       if (state.status === 'waiting') return '';
-      if (state.status === 'countdown') return '';
-      const minutes = Math.floor(state.time_left / 60);
-      const seconds = state.time_left % 60;
-      return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+      if (state.status === 'countdown') {
+        const seconds = Math.max(state.countdown, 0);
+        return seconds > 0 ? `Старт через ${seconds} сек.` : 'Игра начинается!';
+      }
+      if (state.status === 'running') {
+        const minutes = Math.floor(state.time_left / 60);
+        const seconds = Math.max(state.time_left % 60, 0);
+        return `Осталось: ${minutes}:${seconds.toString().padStart(2, '0')}`;
+      }
+      return '';
     }
 
     function formatPlayerLabel(pid, info) {
@@ -1930,27 +1994,47 @@ GAME_HTML = """
       return 'Соперник';
     }
 
-    function updateScores(players) {
-      scoresEl.innerHTML = '';
+    function updatePlayers(players) {
       const order = ['p1', 'p2'];
       for (const pid of order) {
         const info = players[pid];
-        if (!info) {
+        const elements = playerElements[pid];
+        if (!info || !elements || !elements.root) {
           continue;
         }
-        const item = document.createElement('li');
-        const badge = document.createElement('span');
-        badge.className = 'badge';
-        badge.style.backgroundColor = info.color;
-        item.appendChild(badge);
-        const label = document.createElement('span');
-        label.textContent = formatPlayerLabel(pid, info);
-        const score = document.createElement('span');
-        score.textContent = info.score;
-        item.appendChild(label);
-        item.appendChild(score);
-        scoresEl.appendChild(item);
+        elements.name.textContent = formatPlayerLabel(pid, info);
+        elements.score.textContent = info.score;
+        const color = typeof info.color === 'string' ? info.color : '#38bdf8';
+        elements.root.style.setProperty('--player-color', color);
+        elements.root.classList.toggle('disconnected', info.connected !== true);
+        elements.root.classList.toggle('you', pid === you);
       }
+    }
+
+    function updateResultOverlay(state) {
+      if (state.status !== 'finished') {
+        resultOverlay.classList.add('hidden');
+        return;
+      }
+      const players = state.players || {};
+      const p1Score = players.p1 ? players.p1.score : 0;
+      const p2Score = players.p2 ? players.p2.score : 0;
+      if (!state.winner) {
+        resultTitle.textContent = 'НИЧЬЯ';
+      } else {
+        resultTitle.textContent = state.winner === you ? 'ПОБЕДА' : 'ПОРАЖЕНИЕ';
+      }
+      resultScore.textContent = `Счёт: ${p1Score} — ${p2Score}`;
+      const reasonKey = typeof state.reason === 'string' ? state.reason : '';
+      const reasonText = FINISH_REASON_TEXT[reasonKey] || '';
+      if (reasonText) {
+        resultReason.textContent = `(${reasonText})`;
+        resultReason.classList.remove('hidden');
+      } else {
+        resultReason.textContent = '';
+        resultReason.classList.add('hidden');
+      }
+      resultOverlay.classList.remove('hidden');
     }
 
     function updateUI(state) {
@@ -1999,13 +2083,16 @@ GAME_HTML = """
       scheduleRender();
       statusEl.textContent = formatStatus(state);
       timerEl.textContent = formatTimer(state);
-      restartButton.disabled = state.status !== 'finished';
-      updateScores(state.players);
+      updatePlayers(state.players);
+      updateResultOverlay(state);
 
-      const showBoard = state.status === 'running' || state.status === 'finished';
+      const showBoard = state.status === 'running'
+        || state.status === 'finished'
+        || state.status === 'countdown';
       gameArea.classList.toggle('hidden', !showBoard);
 
       if (!showBoard) {
+        resultOverlay.classList.add('hidden');
         if (state.status === 'waiting') {
           showOverlay('Ожидание соперника', 'Отправьте своему другу ссылку, чтобы начать игру.', { showShare: true });
         } else if (state.status === 'countdown') {
@@ -2088,7 +2175,16 @@ GAME_HTML = """
       }
     });
 
-    restartButton.addEventListener('click', () => {
+    resultHomeButton.addEventListener('click', () => {
+      const segments = window.location.pathname.split('/').filter(Boolean);
+      if (segments.length >= 2 && segments[segments.length - 2] === 'game') {
+        segments.splice(-2, 2);
+      }
+      const basePath = segments.length ? `/${segments.join('/')}` : '/';
+      window.location.href = basePath || '/';
+    });
+
+    resultRematchButton.addEventListener('click', () => {
       sendAction('restart');
     });
 

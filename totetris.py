@@ -1271,11 +1271,28 @@ GAME_HTML = """
     .board-wrapper { position: relative; display: flex; flex-direction: column; align-items: center; gap: 1rem; }
     .board-shell { position: relative; }
     .timer-display { min-height: 1.5rem; font-size: 1.25rem; font-weight: 600; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.06em; }
-    .player-card { --player-color: #38bdf8; background: rgba(15, 23, 42, 0.78); padding: 1.5rem 1.25rem; border-radius: 0.9rem; border: 1px solid rgba(148, 163, 184, 0.18); border-top: 4px solid var(--player-color); box-shadow: 0 20px 50px rgba(15, 23, 42, 0.45); display: flex; flex-direction: column; align-items: center; gap: 0.75rem; text-align: center; transition: transform 0.2s ease, box-shadow 0.2s ease; }
-    .player-card.you { box-shadow: 0 24px 60px rgba(56, 189, 248, 0.35); transform: translateY(-4px); }
-    .player-card.disconnected { opacity: 0.6; }
-    .player-name { font-size: 1.05rem; font-weight: 600; color: #e2e8f0; }
-    .player-score { font-size: 2.25rem; font-weight: 700; color: #f8fafc; line-height: 1; }
+    .player-card { --player-color: #38bdf8; position: relative; background: linear-gradient(145deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.82)); border-radius: 1.1rem; border: 1px solid rgba(148, 163, 184, 0.18); padding: 1.35rem 1.4rem; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 1.1rem; box-shadow: 0 18px 45px rgba(15, 23, 42, 0.55); isolation: isolate; overflow: hidden; transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease; }
+    .player-card::before { content: ""; position: absolute; inset: -50% -60% 45% -60%; background: radial-gradient(circle at top left, var(--player-color) 0%, rgba(15, 23, 42, 0) 65%); opacity: 0.5; transform: rotate(-8deg); z-index: -2; transition: opacity 0.25s ease; }
+    .player-card::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(15, 23, 42, 0.6)); mix-blend-mode: screen; opacity: 0.35; z-index: -1; }
+    .player-card:hover { transform: translateY(-2px); box-shadow: 0 22px 60px rgba(15, 23, 42, 0.62); }
+    .player-card.you { transform: translateY(-4px) scale(1.01); box-shadow: 0 28px 75px rgba(15, 23, 42, 0.68); border-color: var(--player-color); }
+    .player-card.you::before { opacity: 0.7; }
+    .player-card.connected { border-color: var(--player-color); box-shadow: 0 20px 55px rgba(15, 23, 42, 0.6), 0 0 22px -6px var(--player-color); }
+    .player-card.connected::before { opacity: 0.65; }
+    .player-card.disconnected { opacity: 0.72; }
+    .player-card.disconnected::before { opacity: 0.35; }
+    .player-avatar { width: 56px; height: 56px; border-radius: 1rem; background: rgba(15, 23, 42, 0.65); border: 2px solid rgba(148, 163, 184, 0.35); display: flex; align-items: center; justify-content: center; font-size: 1.3rem; font-weight: 700; letter-spacing: 0.08em; color: #f8fafc; text-transform: uppercase; position: relative; overflow: hidden; }
+    .player-avatar::after { content: ""; position: absolute; inset: 0; background: linear-gradient(135deg, rgba(248, 250, 252, 0.18), rgba(56, 189, 248, 0.12)); opacity: 0.6; mix-blend-mode: screen; }
+    .player-card.you .player-avatar { border-color: var(--player-color); box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.6), 0 0 22px -8px var(--player-color); }
+    .player-card.disconnected .player-avatar { filter: grayscale(0.25); opacity: 0.8; }
+    .player-info { display: flex; flex-direction: column; gap: 0.25rem; align-items: flex-start; min-width: 0; }
+    .player-name { font-size: 1.1rem; font-weight: 600; color: #f8fafc; letter-spacing: 0.01em; text-transform: uppercase; }
+    .player-name span { display: block; }
+    .player-status { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.18em; font-weight: 600; color: #94a3b8; display: flex; align-items: center; gap: 0.45rem; white-space: nowrap; }
+    .player-status::before { content: ""; width: 9px; height: 9px; border-radius: 999px; background: var(--player-color); box-shadow: 0 0 8px rgba(56, 189, 248, 0.55); transition: background 0.25s ease, box-shadow 0.25s ease, opacity 0.25s ease; }
+    .player-card.disconnected .player-status { color: #64748b; }
+    .player-card.disconnected .player-status::before { background: #475569; box-shadow: none; opacity: 0.7; }
+    .player-score { font-size: 2.6rem; font-weight: 700; color: #f8fafc; letter-spacing: 0.06em; line-height: 1; text-align: right; min-width: 3.75rem; }
     .status-text { font-weight: 600; min-height: 1.5rem; text-align: center; }
     .link { color: #38bdf8; cursor: pointer; }
     .game-footer { display: flex; flex-direction: column; align-items: center; gap: 0.75rem; }
@@ -1293,7 +1310,12 @@ GAME_HTML = """
     .result-actions { display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center; margin-top: 0.5rem; }
     @media (max-width: 900px) {
       .game-layout { grid-template-columns: 1fr; }
-      .player-card { width: min(280px, 100%); }
+      .player-card { width: min(360px, 100%); justify-self: center; }
+    }
+    @media (max-width: 640px) {
+      .player-card { grid-template-columns: auto 1fr; grid-template-rows: auto auto; row-gap: 0.65rem; text-align: center; }
+      .player-info { align-items: center; }
+      .player-score { grid-column: 1 / -1; justify-self: center; }
     }
     .overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.94); display: flex; align-items: center; justify-content: center; padding: 2rem; z-index: 20; }
     .overlay.hidden { display: none; }
@@ -1326,7 +1348,11 @@ GAME_HTML = """
     <div id=\"game-area\" class=\"game-area hidden\">
       <div class=\"game-layout\">
         <div id=\"player-p1\" class=\"player-card\">
-          <div id=\"player-p1-name\" class=\"player-name\">Игрок 1</div>
+          <div id=\"player-p1-avatar\" class=\"player-avatar\" aria-hidden=\"true\">P1</div>
+          <div class=\"player-info\">
+            <div id=\"player-p1-name\" class=\"player-name\">Игрок 1</div>
+            <div id=\"player-p1-status\" class=\"player-status\">Ожидает подключения</div>
+          </div>
           <div id=\"player-p1-score\" class=\"player-score\">0</div>
         </div>
         <div class=\"board-wrapper\">
@@ -1347,7 +1373,11 @@ GAME_HTML = """
           </div>
         </div>
         <div id=\"player-p2\" class=\"player-card\">
-          <div id=\"player-p2-name\" class=\"player-name\">Игрок 2</div>
+          <div id=\"player-p2-avatar\" class=\"player-avatar\" aria-hidden=\"true\">P2</div>
+          <div class=\"player-info\">
+            <div id=\"player-p2-name\" class=\"player-name\">Игрок 2</div>
+            <div id=\"player-p2-status\" class=\"player-status\">Ожидает подключения</div>
+          </div>
           <div id=\"player-p2-score\" class=\"player-score\">0</div>
         </div>
       </div>
@@ -1412,11 +1442,15 @@ GAME_HTML = """
         root: document.getElementById('player-p1'),
         name: document.getElementById('player-p1-name'),
         score: document.getElementById('player-p1-score'),
+        avatar: document.getElementById('player-p1-avatar'),
+        status: document.getElementById('player-p1-status'),
       },
       p2: {
         root: document.getElementById('player-p2'),
         name: document.getElementById('player-p2-name'),
         score: document.getElementById('player-p2-score'),
+        avatar: document.getElementById('player-p2-avatar'),
+        status: document.getElementById('player-p2-status'),
       },
     };
     const resultOverlay = document.getElementById('result-overlay');
@@ -1980,8 +2014,9 @@ GAME_HTML = """
     }
 
     function formatPlayerLabel(pid, info) {
-      const username = typeof info.username === 'string' ? info.username.trim() : '';
-      const isConnected = info.connected === true;
+      const details = info || {};
+      const username = typeof details.username === 'string' ? details.username.trim() : '';
+      const isConnected = details.connected === true;
       if (pid === you) {
         return username ? `${username}` : 'Вы';
       }
@@ -1994,20 +2029,58 @@ GAME_HTML = """
       return 'Соперник';
     }
 
+    function formatPlayerStatusText(pid, info) {
+      const details = info || {};
+      if (details.connected === true) {
+        return pid === you ? 'Вы в игре' : 'На связи';
+      }
+      if (pid === you) {
+        return 'Подключение...';
+      }
+      return 'Ожидает подключения';
+    }
+
+    function getAvatarInitials(label, fallback) {
+      const source = typeof label === 'string' ? label : '';
+      const normalized = source.replace(/[\f\n\r\t ]+/g, ' ').trim();
+      if (!normalized) {
+        return fallback;
+      }
+      const parts = normalized.split(' ').filter(Boolean);
+      if (parts.length === 1) {
+        const char = parts[0].charAt(0);
+        return char ? char.toUpperCase() : fallback;
+      }
+      const first = parts[0].charAt(0);
+      const second = parts[1].charAt(0);
+      const combined = `${first}${second}`.trim();
+      return combined ? combined.toUpperCase() : fallback;
+    }
+
     function updatePlayers(players) {
       const order = ['p1', 'p2'];
       for (const pid of order) {
-        const info = players[pid];
         const elements = playerElements[pid];
-        if (!info || !elements || !elements.root) {
+        if (!elements || !elements.root) {
           continue;
         }
-        elements.name.textContent = formatPlayerLabel(pid, info);
-        elements.score.textContent = info.score;
+        const info = players && typeof players === 'object' ? players[pid] || {} : {};
+        const label = formatPlayerLabel(pid, info);
+        elements.name.textContent = label;
+        const scoreValue = typeof info.score === 'number' ? info.score : 0;
+        elements.score.textContent = scoreValue;
         const color = typeof info.color === 'string' ? info.color : '#38bdf8';
         elements.root.style.setProperty('--player-color', color);
         elements.root.classList.toggle('disconnected', info.connected !== true);
         elements.root.classList.toggle('you', pid === you);
+        elements.root.classList.toggle('connected', info.connected === true);
+        if (elements.status) {
+          elements.status.textContent = formatPlayerStatusText(pid, info);
+        }
+        if (elements.avatar) {
+          const fallback = pid === 'p1' ? 'P1' : 'P2';
+          elements.avatar.textContent = getAvatarInitials(label, fallback);
+        }
       }
     }
 

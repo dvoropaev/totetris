@@ -995,7 +995,7 @@ INDEX_HTML = """
   <div id=\"user-overlay\" class=\"user-overlay hidden\">
     <div class=\"user-overlay-box\">
       <h2>Представьтесь</h2>
-      <p>Укажите имя, которое увидит ваш соперник в матче.</p>
+      <p>Укажите имя</p>
       <form id=\"user-form\" class=\"user-form\">
         <label class=\"user-label\" for=\"user-name\">Ваше имя</label>
         <input id=\"user-name\" class=\"user-input\" name=\"username\" maxlength=\"64\" autocomplete=\"off\" required />
@@ -1983,13 +1983,13 @@ GAME_HTML = """
       const username = typeof info.username === 'string' ? info.username.trim() : '';
       const isConnected = info.connected === true;
       if (pid === you) {
-        return username ? `${username} (вы)` : 'Вы';
+        return username ? `${username}` : 'Вы';
       }
       if (!isConnected) {
         return 'Ожидаем соперника';
       }
       if (username) {
-        return `${username} (соперник)`;
+        return `${username}`;
       }
       return 'Соперник';
     }

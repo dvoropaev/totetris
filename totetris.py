@@ -1042,14 +1042,37 @@ GAME_HTML = """
       overlay.classList.add('hidden');
     }
 
-    function connect() {
+    function buildWebSocketUrl() {
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-      ws = new WebSocket(`${protocol}://${window.location.host}/ws/${roomId}`);
+      const segments = window.location.pathname.split('/').filter(Boolean);
+      if (segments.length >= 2 && segments[segments.length - 2] === 'game') {
+        segments.splice(-2, 2);
+      }
+      const basePath = segments.length ? `/${segments.join('/')}` : '';
+      let normalizedBase = basePath;
+      while (normalizedBase.endsWith('/') && normalizedBase.length > 1) {
+        normalizedBase = normalizedBase.slice(0, -1);
+      }
+      if (normalizedBase === '/') {
+        normalizedBase = '';
+      }
+      const path = `${normalizedBase}/ws/${roomId}`;
+      const fullPath = path.startsWith('/') ? path : `/${path}`;
+      return `${protocol}://${window.location.host}${fullPath}`;
+    }
+
+    function connect() {
+      ws = new WebSocket(buildWebSocketUrl());
 
       ws.addEventListener('message', (event) => {
         const state = JSON.parse(event.data);
         you = state.you;
         updateUI(state);
+      });
+
+      ws.addEventListener('error', () => {
+        statusEl.textContent = 'Не удалось подключиться';
+        showOverlay('Ошибка подключения', 'Не удаётся установить связь с сервером. Попробуйте обновить страницу.');
       });
 
       ws.addEventListener('close', () => {

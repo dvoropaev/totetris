@@ -1261,78 +1261,395 @@ GAME_HTML = """
   <title>Totetris — игра</title>
   <style>
     :root { color-scheme: dark; }
-    body { margin: 0; font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; }
-    main { width: min(100%, 1100px); margin: 0 auto; padding: clamp(1.5rem, 4vw, 3rem) clamp(1rem, 4vw, 2.5rem); display: flex; flex-direction: column; gap: clamp(1.5rem, 2vw, 2.5rem); align-items: center; box-sizing: border-box; }
-    h1 { margin: 0; font-size: clamp(1.75rem, 4vw, 2.5rem); }
-    canvas { width: 100%; height: auto; display: block; image-rendering: pixelated; }
-    .game-area { width: 100%; display: flex; flex-direction: column; align-items: center; gap: clamp(1.5rem, 2vw, 2.5rem); }
+    body {
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+    }
+    main {
+      width: min(100%, 1100px);
+      margin: 0 auto;
+      padding: clamp(1.25rem, 3vw, 2.5rem) clamp(1rem, 4vw, 2.5rem);
+      display: flex;
+      flex-direction: column;
+      gap: clamp(1.25rem, 2vw, 2.25rem);
+      align-items: stretch;
+      box-sizing: border-box;
+      flex: 1;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(1.75rem, 4vw, 2.5rem);
+      text-align: center;
+    }
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      image-rendering: pixelated;
+    }
+    .game-area {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: clamp(1.25rem, 2vw, 2rem);
+      flex: 1;
+    }
     .game-area.hidden { display: none !important; }
-    .game-shell { width: 100%; display: flex; flex-direction: column; gap: clamp(1.5rem, 2vw, 2.5rem); }
-    .scoreboard { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-areas: 'p1 info p2'; gap: clamp(1rem, 2vw, 1.5rem); width: 100%; align-items: stretch; }
-    #player-p1 { grid-area: p1; }
-    #player-p2 { grid-area: p2; }
-    .scoreboard-info { grid-area: info; background: rgba(15, 23, 42, 0.82); border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.18); padding: clamp(1rem, 2vw, 1.5rem); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.75rem; box-shadow: 0 24px 60px rgba(15, 23, 42, 0.4); position: relative; overflow: hidden; }
-    .scoreboard-info::before { content: ''; position: absolute; inset: 0; background: radial-gradient(circle at top, rgba(56, 189, 248, 0.16), transparent 65%); opacity: 0.9; pointer-events: none; }
+    .game-shell {
+      width: 100%;
+      display: grid;
+      gap: clamp(1.25rem, 2vw, 2rem);
+      align-items: start;
+    }
+    .scoreboard {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: clamp(0.85rem, 1.8vw, 1.35rem);
+      width: 100%;
+      align-items: stretch;
+    }
+    .scoreboard-info,
+    #player-p1,
+    #player-p2 {
+      flex: 1 1 clamp(200px, 30vw, 280px);
+    }
+    .scoreboard-info {
+      background: rgba(15, 23, 42, 0.82);
+      border-radius: 1rem;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      padding: clamp(1rem, 2vw, 1.5rem);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      box-shadow: 0 24px 60px rgba(15, 23, 42, 0.4);
+      position: relative;
+      overflow: hidden;
+    }
+    .scoreboard-info::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(circle at top, rgba(56, 189, 248, 0.16), transparent 65%);
+      opacity: 0.9;
+      pointer-events: none;
+    }
     .scoreboard-info > * { position: relative; z-index: 1; }
-    .timer-display { font-size: clamp(1.1rem, 2.8vw, 1.35rem); font-weight: 700; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.12em; background: rgba(56, 189, 248, 0.12); padding: 0.4rem 1.25rem; border-radius: 999px; min-height: 2.1rem; display: inline-flex; align-items: center; justify-content: center; }
-    .status-text { font-weight: 600; text-align: center; font-size: 0.95rem; color: #cbd5f5; min-height: 1.5rem; }
-    .board-wrapper { width: 100%; display: flex; justify-content: center; }
-    .board-shell { position: relative; width: min(100%, 640px); background: rgba(15, 23, 42, 0.88); border-radius: 1.25rem; border: 1px solid rgba(51, 65, 85, 0.65); padding: clamp(0.9rem, 3vw, 1.75rem); box-shadow: 0 35px 80px rgba(15, 23, 42, 0.55); }
-    .result-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, 0.92); border-radius: 1rem; z-index: 10; padding: 2rem; text-align: center; backdrop-filter: blur(6px); }
+    .timer-display {
+      font-size: clamp(1.1rem, 2.8vw, 1.35rem);
+      font-weight: 700;
+      color: #38bdf8;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      background: rgba(56, 189, 248, 0.12);
+      padding: 0.4rem 1.25rem;
+      border-radius: 999px;
+      min-height: 2.1rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .status-text {
+      font-weight: 600;
+      text-align: center;
+      font-size: 0.95rem;
+      color: #cbd5f5;
+      min-height: 1.5rem;
+    }
+    .board-wrapper {
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .board-shell {
+      position: relative;
+      width: min(100%, 640px);
+      background: rgba(15, 23, 42, 0.88);
+      border-radius: 1.25rem;
+      border: 1px solid rgba(51, 65, 85, 0.65);
+      padding: clamp(0.75rem, 2.6vw, 1.5rem);
+      box-shadow: 0 35px 80px rgba(15, 23, 42, 0.55);
+      aspect-ratio: 2 / 3;
+      max-height: min(80vh, 720px);
+      display: flex;
+      align-items: stretch;
+    }
+    .board-shell canvas { flex: 1; }
+    .result-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(15, 23, 42, 0.92);
+      border-radius: 1rem;
+      z-index: 10;
+      padding: 2rem;
+      text-align: center;
+      backdrop-filter: blur(6px);
+    }
     .result-overlay.hidden { display: none; }
-    .result-box { display: flex; flex-direction: column; gap: 1rem; align-items: center; max-width: 320px; }
-    .result-title { font-size: 2rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
-    .result-score { font-size: 1.4rem; font-weight: 600; }
-    .result-reason { font-size: 1rem; color: #cbd5f5; }
-    .result-actions { display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center; margin-top: 0.5rem; }
-    .player-card { --player-color: #38bdf8; position: relative; background: linear-gradient(180deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.88)); border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.18); padding: clamp(1rem, 2.5vw, 1.6rem); display: grid; gap: 0.65rem; justify-items: center; box-shadow: 0 24px 60px rgba(15, 23, 42, 0.45); transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease; overflow: hidden; }
-    .player-card::before { content: ''; position: absolute; inset: 0; border-radius: inherit; border: 2px solid rgba(148, 163, 184, 0.12); pointer-events: none; }
-    .player-card::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(140deg, rgba(56, 189, 248, 0.18), transparent 60%); opacity: 0; transition: opacity 0.25s ease; pointer-events: none; }
-    .player-card.you { transform: translateY(-4px); border-color: rgba(56, 189, 248, 0.4); box-shadow: 0 32px 70px rgba(56, 189, 248, 0.28); }
+    .result-box {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      align-items: center;
+      max-width: 320px;
+    }
+    .result-title {
+      font-size: 2rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .result-score {
+      font-size: 1.4rem;
+      font-weight: 600;
+    }
+    .result-reason {
+      font-size: 1rem;
+      color: #cbd5f5;
+    }
+    .result-actions {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin-top: 0.5rem;
+    }
+    .player-card {
+      --player-color: #38bdf8;
+      position: relative;
+      background: linear-gradient(180deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.88));
+      border-radius: 1rem;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      padding: clamp(1rem, 2.5vw, 1.6rem);
+      display: grid;
+      gap: 0.65rem;
+      justify-items: center;
+      box-shadow: 0 24px 60px rgba(15, 23, 42, 0.45);
+      transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+      overflow: hidden;
+      flex: 1 1 clamp(200px, 30vw, 280px);
+    }
+    .player-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      border: 2px solid rgba(148, 163, 184, 0.12);
+      pointer-events: none;
+    }
+    .player-card::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      background: linear-gradient(140deg, rgba(56, 189, 248, 0.18), transparent 60%);
+      opacity: 0;
+      transition: opacity 0.25s ease;
+      pointer-events: none;
+    }
+    .player-card.you {
+      transform: translateY(-4px);
+      border-color: rgba(56, 189, 248, 0.4);
+      box-shadow: 0 32px 70px rgba(56, 189, 248, 0.28);
+    }
     .player-card.you::after { opacity: 1; }
     .player-card.disconnected { opacity: 0.55; }
-    .player-label { font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(148, 163, 184, 0.75); }
-    .player-name { font-size: clamp(1.1rem, 3vw, 1.4rem); font-weight: 600; color: #f8fafc; text-align: center; }
-    .player-score { font-size: clamp(2.1rem, 6vw, 3rem); font-weight: 700; color: #f8fafc; line-height: 1; }
-    .game-footer { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 0.75rem; }
-    .game-actions { width: 100%; display: flex; gap: 1rem; align-items: center; justify-content: center; flex-wrap: wrap; }
-    button { padding: 0.65rem 1.1rem; border-radius: 0.65rem; border: none; cursor: pointer; background: #38bdf8; color: #0f172a; font-weight: 600; transition: background 0.2s ease, transform 0.2s ease; }
+    .player-label {
+      font-size: 0.75rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: rgba(148, 163, 184, 0.75);
+    }
+    .player-name {
+      font-size: clamp(1.1rem, 3vw, 1.4rem);
+      font-weight: 600;
+      color: #f8fafc;
+      text-align: center;
+    }
+    .player-score {
+      font-size: clamp(2.1rem, 6vw, 3rem);
+      font-weight: 700;
+      color: #f8fafc;
+      line-height: 1;
+    }
+    .game-footer {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.75rem;
+      margin-top: auto;
+    }
+    .game-actions {
+      width: 100%;
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    button {
+      padding: 0.65rem 1.1rem;
+      border-radius: 0.65rem;
+      border: none;
+      cursor: pointer;
+      background: #38bdf8;
+      color: #0f172a;
+      font-weight: 600;
+      transition: background 0.2s ease, transform 0.2s ease;
+    }
     button:hover { background: #0ea5e9; transform: translateY(-1px); }
     .secondary-button { background: rgba(148, 163, 184, 0.25); color: #e2e8f0; }
     .secondary-button:hover { background: rgba(148, 163, 184, 0.35); }
     .link { color: #38bdf8; cursor: pointer; font-weight: 600; }
-    .overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.94); display: flex; align-items: center; justify-content: center; padding: 2rem; z-index: 20; }
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.94);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+      z-index: 20;
+    }
     .overlay.hidden { display: none; }
-    .overlay-box { max-width: 440px; width: min(90vw, 440px); background: rgba(15, 23, 42, 0.88); border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 1rem; padding: 2.5rem 2rem; text-align: center; box-shadow: 0 30px 90px rgba(15, 23, 42, 0.65); display: grid; gap: 1.5rem; }
+    .overlay-box {
+      max-width: 440px;
+      width: min(90vw, 440px);
+      background: rgba(15, 23, 42, 0.88);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 1rem;
+      padding: 2.5rem 2rem;
+      text-align: center;
+      box-shadow: 0 30px 90px rgba(15, 23, 42, 0.65);
+      display: grid;
+      gap: 1.5rem;
+    }
     .overlay-box h2 { margin: 0; font-size: 1.6rem; }
     .overlay-box p { margin: 0; line-height: 1.6; color: #cbd5f5; }
-    .overlay-share { display: flex; flex-direction: column; gap: 0.75rem; align-items: center; }
+    .overlay-share {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      align-items: center;
+    }
     .overlay-share.hidden { display: none; }
-    .overlay-link { background: rgba(30, 41, 59, 0.92); padding: 0.75rem 1rem; border-radius: 0.75rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; word-break: break-all; width: 100%; box-sizing: border-box; border: 1px solid rgba(148, 163, 184, 0.25); color: #e2e8f0; }
-    .overlay-copy { padding: 0.65rem 1.6rem; border-radius: 999px; border: none; cursor: pointer; background: #38bdf8; color: #0f172a; font-weight: 600; }
+    .overlay-link {
+      background: rgba(30, 41, 59, 0.92);
+      padding: 0.75rem 1rem;
+      border-radius: 0.75rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+      word-break: break-all;
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      color: #e2e8f0;
+    }
+    .overlay-copy {
+      padding: 0.65rem 1.6rem;
+      border-radius: 999px;
+      border: none;
+      cursor: pointer;
+      background: #38bdf8;
+      color: #0f172a;
+      font-weight: 600;
+    }
     .overlay-copy:hover { background: #0ea5e9; }
-    .user-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.95); display: flex; align-items: center; justify-content: center; padding: 2rem; z-index: 100; }
+    .user-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.95);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+      z-index: 100;
+    }
     .user-overlay.hidden { display: none; }
-    .user-overlay-box { max-width: 420px; width: min(90vw, 420px); background: rgba(15, 23, 42, 0.92); border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 1rem; padding: 2.25rem 2rem; box-shadow: 0 24px 80px rgba(15, 23, 42, 0.65); display: grid; gap: 1.25rem; text-align: center; }
+    .user-overlay-box {
+      max-width: 420px;
+      width: min(90vw, 420px);
+      background: rgba(15, 23, 42, 0.92);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 1rem;
+      padding: 2.25rem 2rem;
+      box-shadow: 0 24px 80px rgba(15, 23, 42, 0.65);
+      display: grid;
+      gap: 1.25rem;
+      text-align: center;
+    }
     .user-overlay-box h2 { margin: 0; font-size: 1.6rem; }
     .user-overlay-box p { margin: 0; line-height: 1.6; color: #cbd5f5; }
     .user-form { display: grid; gap: 1rem; }
     .user-label { text-align: left; font-weight: 600; font-size: 0.95rem; }
-    .user-input { padding: 0.75rem 1rem; border-radius: 0.75rem; border: 1px solid rgba(148, 163, 184, 0.35); background: rgba(15, 23, 42, 0.8); color: #e2e8f0; font-size: 1rem; }
-    .user-input:focus { outline: none; border-color: #38bdf8; box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25); }
+    .user-input {
+      padding: 0.75rem 1rem;
+      border-radius: 0.75rem;
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      background: rgba(15, 23, 42, 0.8);
+      color: #e2e8f0;
+      font-size: 1rem;
+    }
+    .user-input:focus {
+      outline: none;
+      border-color: #38bdf8;
+      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25);
+    }
     .user-error { min-height: 1.25rem; font-size: 0.9rem; color: #fca5a5; text-align: left; }
-    .user-submit { padding: 0.85rem 1.6rem; border-radius: 999px; border: none; background: linear-gradient(135deg, #38bdf8, #818cf8); color: #0f172a; font-weight: 600; cursor: pointer; }
+    .user-submit {
+      padding: 0.85rem 1.6rem;
+      border-radius: 999px;
+      border: none;
+      background: linear-gradient(135deg, #38bdf8, #818cf8);
+      color: #0f172a;
+      font-weight: 600;
+      cursor: pointer;
+    }
     .user-submit:hover { filter: brightness(1.05); }
     .hidden { display: none !important; }
-    @media (max-width: 1024px) {
-      .scoreboard { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: 'p1 p2' 'info info'; }
-    }
     @media (max-width: 640px) {
       main { padding: 1.5rem 1rem; }
-      .scoreboard { grid-template-columns: 1fr; grid-template-areas: 'info' 'p1' 'p2'; }
-      .player-card, .scoreboard-info { width: 100%; }
+      .scoreboard-info,
+      #player-p1,
+      #player-p2 { flex: 1 1 100%; }
       .game-actions { flex-direction: column; }
-      .game-actions .link, .game-actions button { width: 100%; text-align: center; }
+      .game-actions .link,
+      .game-actions button { width: 100%; text-align: center; }
+    }
+    @media (max-height: 760px) {
+      main { padding: clamp(1rem, 2vh, 1.5rem) clamp(0.75rem, 2.5vw, 1.5rem); }
+      .game-area { gap: clamp(0.75rem, 1.8vh, 1.25rem); }
+      .game-shell { gap: clamp(0.75rem, 1.8vh, 1.25rem); }
+      .board-shell { max-height: min(74vh, 640px); }
+    }
+    @media (min-width: 960px) {
+      .game-shell {
+        grid-template-columns: minmax(240px, 0.95fr) minmax(0, 1.4fr);
+        align-items: stretch;
+      }
+      .scoreboard {
+        flex-direction: column;
+        gap: clamp(1rem, 1.6vw, 1.25rem);
+        height: 100%;
+      }
+      .scoreboard-info,
+      #player-p1,
+      #player-p2 {
+        flex: 1 1 auto;
+      }
+      .board-wrapper { align-items: stretch; }
+      .board-shell { margin: 0 auto; }
     }
   </style>
 </head>

@@ -9,12 +9,13 @@ import json
 import os
 import random
 import re
+import secrets
 import string
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Set, Tuple
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -140,6 +141,7 @@ COOKIE_USER_ID = "totetris_uid"
 COOKIE_USERNAME = "totetris_username"
 HEX_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 USERNAME_MAX_LENGTH = 32
+IDENTITY_COOKIE_MAX_AGE = 60 * 60 * 24 * 365
 
 
 def normalize_username(raw: str) -> str:
@@ -147,17 +149,50 @@ def normalize_username(raw: str) -> str:
     return value[:USERNAME_MAX_LENGTH]
 
 
-def parse_identity_from_cookies(cookies: Mapping[str, str]) -> Tuple[str, str]:
+@dataclass
+class Identity:
+    user_id: str
+    username: str
+    cookies_valid: bool = True
+
+
+def parse_identity_from_cookies(cookies: Mapping[str, str]) -> Identity:
     raw_id = (cookies.get(COOKIE_USER_ID) or "").strip().lower()
     raw_username = cookies.get(COOKIE_USERNAME)
+    cookies_valid = True
+
     if not raw_id or not HEX_ID_RE.match(raw_id):
-        raise HTTPException(status_code=400, detail="invalid identity cookie")
-    if raw_username is None:
-        raise HTTPException(status_code=400, detail="invalid identity cookie")
-    username = normalize_username(unquote(raw_username))
-    if not username:
-        raise HTTPException(status_code=400, detail="invalid identity cookie")
-    return raw_id, username
+        raw_id = secrets.token_hex(16)
+        cookies_valid = False
+
+    decoded_username = ""
+    if raw_username is not None:
+        try:
+            decoded_username = normalize_username(unquote(raw_username))
+        except Exception:
+            decoded_username = ""
+    if not decoded_username:
+        decoded_username = f"Игрок {raw_id[-4:]}"
+        cookies_valid = False
+
+    return Identity(user_id=raw_id, username=decoded_username, cookies_valid=cookies_valid)
+
+
+def apply_identity_cookies(response: JSONResponse, identity: Identity) -> None:
+    response.set_cookie(
+        COOKIE_USER_ID,
+        identity.user_id,
+        max_age=IDENTITY_COOKIE_MAX_AGE,
+        path="/",
+        samesite="lax",
+    )
+    response.set_cookie(
+        COOKIE_USERNAME,
+        quote(identity.username, safe=""),
+        max_age=IDENTITY_COOKIE_MAX_AGE,
+        path="/",
+        samesite="lax",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1242,6 +1277,18 @@ GAME_HTML = """
       </div>
     </div>
   </main>
+  <div id=\"user-overlay\" class=\"user-overlay hidden\">
+    <div class=\"user-overlay-box\">
+      <h2>Представьтесь</h2>
+      <p>Укажите имя, которое увидит ваш соперник в матче.</p>
+      <form id=\"user-form\" class=\"user-form\">
+        <label class=\"user-label\" for=\"user-name\">Ваше имя</label>
+        <input id=\"user-name\" class=\"user-input\" name=\"username\" maxlength=\"64\" autocomplete=\"off\" required />
+        <div id=\"user-error\" class=\"user-error\"></div>
+        <button type=\"submit\" class=\"user-submit\">Продолжить</button>
+      </form>
+    </div>
+  </div>
   <div id=\"overlay\" class=\"overlay\">
     <div class=\"overlay-box\">
       <h2 id=\"overlay-title\">Подключение...</h2>
@@ -1470,7 +1517,13 @@ GAME_HTML = """
       ws = new WebSocket(buildWebSocketUrl());
 
       ws.addEventListener('message', (event) => {
-        const state = JSON.parse(event.data);
+        const payload = JSON.parse(event.data);
+        if (payload && payload.type === 'identity') {
+          const identity = storeIdentity(payload.user_id, payload.username);
+          identityPromise = Promise.resolve(identity);
+          return;
+        }
+        const state = payload;
         you = state.you;
         updateUI(state);
       });
@@ -1993,21 +2046,27 @@ GAME_HTML = """
 
 @app.post("/api/create")
 async def api_create(request: Request) -> JSONResponse:
-    user_id, username = parse_identity_from_cookies(request.cookies)
+    identity = parse_identity_from_cookies(request.cookies)
     room = await manager.create_room(
-        creator_user_id=user_id, creator_username=username
+        creator_user_id=identity.user_id, creator_username=identity.username
     )
-    return JSONResponse({"room": room.room_id})
+    response = JSONResponse({"room": room.room_id})
+    if not identity.cookies_valid:
+        apply_identity_cookies(response, identity)
+    return response
 
 
 @app.post("/api/random")
 async def api_random(request: Request) -> JSONResponse:
-    user_id, username = parse_identity_from_cookies(request.cookies)
+    identity = parse_identity_from_cookies(request.cookies)
     try:
-        room_id = await matchmaker.join(user_id, username)
+        room_id = await matchmaker.join(identity.user_id, identity.username)
     except asyncio.CancelledError as exc:
         raise HTTPException(status_code=499, detail="client closed request") from exc
-    return JSONResponse({"room": room_id})
+    response = JSONResponse({"room": room_id})
+    if not identity.cookies_valid:
+        apply_identity_cookies(response, identity)
+    return response
 
 
 @app.get("/")
@@ -2025,15 +2084,21 @@ async def game(room_id: str) -> HTMLResponse:
 @app.websocket("/ws/{room_id}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str) -> None:
     room = await manager.get_room(room_id)
+    identity = parse_identity_from_cookies(websocket.cookies)
     try:
-        user_id, username = parse_identity_from_cookies(websocket.cookies)
-    except HTTPException:
-        await websocket.close(code=1008)
-        return
-    try:
-        pid = await room.connect(websocket, user_id, username)
+        pid = await room.connect(websocket, identity.user_id, identity.username)
     except HTTPException:
         return
+    if not identity.cookies_valid:
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "identity",
+                    "user_id": identity.user_id,
+                    "username": identity.username,
+                }
+            )
+        )
     try:
         while True:
             data = await websocket.receive_text()

@@ -1261,45 +1261,52 @@ GAME_HTML = """
   <title>Totetris — игра</title>
   <style>
     :root { color-scheme: dark; }
-    body { margin: 0; font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; }
-    main { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 2rem 1rem; gap: 1.5rem; min-height: 100vh; box-sizing: border-box; }
-    h1 { margin: 0; }
-    #board { background: #1e293b; border: 2px solid #334155; border-radius: 0.5rem; box-shadow: 0 12px 40px rgba(15,23,42,0.35); }
-    .game-area { display: flex; flex-direction: column; align-items: center; gap: 1.75rem; }
+    body { margin: 0; min-height: 100vh; display: flex; flex-direction: column; font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; }
+    main { flex: 1; width: min(100%, 1100px); margin: 0 auto; padding: clamp(1.25rem, 3vh, 2.75rem) clamp(1rem, 3vw, 2.5rem); display: flex; flex-direction: column; justify-content: center; align-items: center; gap: clamp(1.25rem, 2.5vh, 2.5rem); box-sizing: border-box; }
+    h1 { margin: 0; font-size: clamp(1.65rem, 3.5vw, 2.35rem); text-align: center; }
+    canvas { width: 100%; height: auto; display: block; image-rendering: pixelated; }
+    .game-area { width: 100%; display: flex; flex-direction: column; align-items: center; gap: clamp(1.25rem, 2.5vh, 2.25rem); }
     .game-area.hidden { display: none !important; }
-    .game-layout { display: grid; grid-template-columns: minmax(180px, 1fr) auto minmax(180px, 1fr); align-items: center; gap: 2rem; width: 100%; max-width: 960px; }
-    .board-wrapper { position: relative; display: flex; flex-direction: column; align-items: center; gap: 1rem; }
-    .board-shell { position: relative; }
-    .timer-display { min-height: 1.5rem; font-size: 1.25rem; font-weight: 600; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.06em; }
-    .player-card { --player-color: #38bdf8; background: rgba(15, 23, 42, 0.78); padding: 1.5rem 1.25rem; border-radius: 0.9rem; border: 1px solid rgba(148, 163, 184, 0.18); border-top: 4px solid var(--player-color); box-shadow: 0 20px 50px rgba(15, 23, 42, 0.45); display: flex; flex-direction: column; align-items: center; gap: 0.75rem; text-align: center; transition: transform 0.2s ease, box-shadow 0.2s ease; }
-    .player-card.you { box-shadow: 0 24px 60px rgba(56, 189, 248, 0.35); transform: translateY(-4px); }
-    .player-card.disconnected { opacity: 0.6; }
-    .player-name { font-size: 1.05rem; font-weight: 600; color: #e2e8f0; }
-    .player-score { font-size: 2.25rem; font-weight: 700; color: #f8fafc; line-height: 1; }
-    .status-text { font-weight: 600; min-height: 1.5rem; text-align: center; }
-    .link { color: #38bdf8; cursor: pointer; }
-    .game-footer { display: flex; flex-direction: column; align-items: center; gap: 0.75rem; }
-    .game-actions { display: flex; gap: 1rem; align-items: center; justify-content: center; flex-wrap: wrap; }
-    button { padding: 0.65rem 1.1rem; border-radius: 0.65rem; border: none; cursor: pointer; background: #38bdf8; color: #0f172a; font-weight: 600; }
-    button:hover { background: #0ea5e9; }
-    .secondary-button { background: rgba(148, 163, 184, 0.25); color: #e2e8f0; }
-    .secondary-button:hover { background: rgba(148, 163, 184, 0.35); }
-    .result-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, 0.92); border-radius: 0.5rem; z-index: 10; padding: 2rem; text-align: center; backdrop-filter: blur(6px); }
+    .game-shell { width: 100%; display: flex; flex-direction: column; gap: clamp(1.25rem, 2vh, 2rem); }
+    .scoreboard { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-areas: 'p1 info p2'; gap: clamp(0.9rem, 2vw, 1.4rem); width: 100%; align-items: stretch; }
+    #player-p1 { grid-area: p1; }
+    #player-p2 { grid-area: p2; }
+    .scoreboard-info { grid-area: info; background: rgba(15, 23, 42, 0.82); border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.18); padding: clamp(0.9rem, 1.8vw, 1.4rem); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.6rem; box-shadow: 0 24px 60px rgba(15, 23, 42, 0.4); position: relative; overflow: hidden; }
+    .scoreboard-info::before { content: ''; position: absolute; inset: 0; background: radial-gradient(circle at top, rgba(56, 189, 248, 0.16), transparent 65%); opacity: 0.9; pointer-events: none; }
+    .scoreboard-info > * { position: relative; z-index: 1; }
+    .timer-display { font-size: clamp(1rem, 2.4vw, 1.3rem); font-weight: 700; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.12em; background: rgba(56, 189, 248, 0.12); padding: 0.35rem 1.15rem; border-radius: 999px; min-height: 2rem; display: inline-flex; align-items: center; justify-content: center; }
+    .status-text { font-weight: 600; text-align: center; font-size: clamp(0.9rem, 2vw, 1rem); color: #cbd5f5; min-height: 1.4rem; }
+    .board-wrapper { width: 100%; display: flex; justify-content: center; }
+    .board-shell { position: relative; --board-height: min(68vh, 600px); --board-width: calc(var(--board-height) * 2 / 3); width: min(100%, var(--board-width)); background: rgba(15, 23, 42, 0.88); border-radius: 1.25rem; border: 1px solid rgba(51, 65, 85, 0.65); padding: clamp(0.75rem, 2.5vw, 1.6rem); box-shadow: 0 35px 80px rgba(15, 23, 42, 0.55); display: flex; justify-content: center; align-items: center; }
+    .board-shell canvas { max-height: var(--board-height); }
+    .result-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, 0.92); border-radius: 1rem; z-index: 10; padding: 2rem; text-align: center; backdrop-filter: blur(6px); }
     .result-overlay.hidden { display: none; }
     .result-box { display: flex; flex-direction: column; gap: 1rem; align-items: center; max-width: 320px; }
     .result-title { font-size: 2rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
     .result-score { font-size: 1.4rem; font-weight: 600; }
     .result-reason { font-size: 1rem; color: #cbd5f5; }
     .result-actions { display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center; margin-top: 0.5rem; }
-    @media (max-width: 900px) {
-      .game-layout { grid-template-columns: 1fr; }
-      .player-card { width: min(280px, 100%); }
-    }
+    .player-card { --player-color: #38bdf8; position: relative; background: linear-gradient(180deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.88)); border-radius: 1rem; border: 1px solid rgba(148, 163, 184, 0.18); padding: clamp(0.9rem, 2.2vw, 1.45rem); display: grid; gap: 0.6rem; justify-items: center; box-shadow: 0 24px 60px rgba(15, 23, 42, 0.45); transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease; overflow: hidden; }
+    .player-card::before { content: ''; position: absolute; inset: 0; border-radius: inherit; border: 2px solid rgba(148, 163, 184, 0.12); pointer-events: none; }
+    .player-card::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(140deg, rgba(56, 189, 248, 0.18), transparent 60%); opacity: 0; transition: opacity 0.25s ease; pointer-events: none; }
+    .player-card.you { transform: translateY(-4px); border-color: rgba(56, 189, 248, 0.4); box-shadow: 0 32px 70px rgba(56, 189, 248, 0.28); }
+    .player-card.you::after { opacity: 1; }
+    .player-card.disconnected { opacity: 0.55; }
+    .player-label { font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(148, 163, 184, 0.75); }
+    .player-name { font-size: clamp(1rem, 2.8vw, 1.35rem); font-weight: 600; color: #f8fafc; text-align: center; }
+    .player-score { font-size: clamp(1.9rem, 5.5vw, 2.7rem); font-weight: 700; color: #f8fafc; line-height: 1; }
+    .game-footer { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 0.65rem; }
+    .game-actions { width: 100%; display: flex; gap: 0.9rem; align-items: center; justify-content: center; flex-wrap: wrap; }
+    button { padding: 0.65rem 1.1rem; border-radius: 0.65rem; border: none; cursor: pointer; background: #38bdf8; color: #0f172a; font-weight: 600; transition: background 0.2s ease, transform 0.2s ease; }
+    button:hover { background: #0ea5e9; transform: translateY(-1px); }
+    .secondary-button { background: rgba(148, 163, 184, 0.25); color: #e2e8f0; }
+    .secondary-button:hover { background: rgba(148, 163, 184, 0.35); }
+    .link { color: #38bdf8; cursor: pointer; font-weight: 600; }
     .overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.94); display: flex; align-items: center; justify-content: center; padding: 2rem; z-index: 20; }
     .overlay.hidden { display: none; }
-    .overlay-box { max-width: 440px; width: min(90vw, 440px); background: rgba(15, 23, 42, 0.88); border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 1rem; padding: 2.5rem 2rem; text-align: center; box-shadow: 0 30px 90px rgba(15, 23, 42, 0.65); }
-    .overlay-box h2 { margin: 0 0 1rem 0; font-size: 1.6rem; }
-    .overlay-box p { margin: 0 0 1.75rem 0; line-height: 1.6; color: #cbd5f5; }
+    .overlay-box { max-width: 440px; width: min(90vw, 440px); background: rgba(15, 23, 42, 0.88); border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 1rem; padding: 2.5rem 2rem; text-align: center; box-shadow: 0 30px 90px rgba(15, 23, 42, 0.65); display: grid; gap: 1.5rem; }
+    .overlay-box h2 { margin: 0; font-size: 1.6rem; }
+    .overlay-box p { margin: 0; line-height: 1.6; color: #cbd5f5; }
     .overlay-share { display: flex; flex-direction: column; gap: 0.75rem; align-items: center; }
     .overlay-share.hidden { display: none; }
     .overlay-link { background: rgba(30, 41, 59, 0.92); padding: 0.75rem 1rem; border-radius: 0.75rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; word-break: break-all; width: 100%; box-sizing: border-box; border: 1px solid rgba(148, 163, 184, 0.25); color: #e2e8f0; }
@@ -1318,19 +1325,47 @@ GAME_HTML = """
     .user-submit { padding: 0.85rem 1.6rem; border-radius: 999px; border: none; background: linear-gradient(135deg, #38bdf8, #818cf8); color: #0f172a; font-weight: 600; cursor: pointer; }
     .user-submit:hover { filter: brightness(1.05); }
     .hidden { display: none !important; }
+    @media (max-width: 1024px) {
+      .scoreboard { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: 'p1 p2' 'info info'; }
+    }
+    @media (max-width: 640px) {
+      main { padding: 1.25rem 1rem; justify-content: flex-start; gap: 1.5rem; }
+      .scoreboard { grid-template-columns: 1fr; grid-template-areas: 'info' 'p1' 'p2'; }
+      .player-card, .scoreboard-info { width: 100%; }
+      .board-shell { --board-height: min(64vh, 520px); }
+      .game-actions { flex-direction: column; }
+      .game-actions .link, .game-actions button { width: 100%; text-align: center; }
+    }
+    @media (max-height: 760px) {
+      main { padding-top: 1rem; padding-bottom: 1rem; }
+      .game-shell { gap: clamp(1rem, 2vh, 1.5rem); }
+      .board-shell { --board-height: min(60vh, 520px); }
+      .player-score { font-size: clamp(1.7rem, 4.5vw, 2.4rem); }
+    }
   </style>
 </head>
 <body>
   <main>
     <h1>Totetris</h1>
     <div id=\"game-area\" class=\"game-area hidden\">
-      <div class=\"game-layout\">
-        <div id=\"player-p1\" class=\"player-card\">
-          <div id=\"player-p1-name\" class=\"player-name\">Игрок 1</div>
-          <div id=\"player-p1-score\" class=\"player-score\">0</div>
+      <div class=\"game-shell\">
+        <div class=\"scoreboard\">
+          <div id=\"player-p1\" class=\"player-card\">
+            <div class=\"player-label\">Игрок 1</div>
+            <div id=\"player-p1-name\" class=\"player-name\">Игрок 1</div>
+            <div id=\"player-p1-score\" class=\"player-score\">0</div>
+          </div>
+          <div class=\"scoreboard-info\">
+            <div id=\"timer\" class=\"timer-display\"></div>
+            <div id=\"status\" class=\"status-text\"></div>
+          </div>
+          <div id=\"player-p2\" class=\"player-card\">
+            <div class=\"player-label\">Игрок 2</div>
+            <div id=\"player-p2-name\" class=\"player-name\">Игрок 2</div>
+            <div id=\"player-p2-score\" class=\"player-score\">0</div>
+          </div>
         </div>
         <div class=\"board-wrapper\">
-          <div id=\"timer\" class=\"timer-display\"></div>
           <div class=\"board-shell\">
             <canvas id=\"board\" width=\"400\" height=\"600\"></canvas>
             <div id=\"result-overlay\" class=\"result-overlay hidden\">
@@ -1346,13 +1381,8 @@ GAME_HTML = """
             </div>
           </div>
         </div>
-        <div id=\"player-p2\" class=\"player-card\">
-          <div id=\"player-p2-name\" class=\"player-name\">Игрок 2</div>
-          <div id=\"player-p2-score\" class=\"player-score\">0</div>
-        </div>
       </div>
       <div class=\"game-footer\">
-        <div id=\"status\" class=\"status-text\"></div>
         <div class=\"game-actions\">
           <a class=\"link\" id=\"invite\" target=\"_blank\">Скопировать ссылку</a>
         </div>

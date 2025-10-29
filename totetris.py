@@ -8,13 +8,15 @@ import configparser
 import json
 import os
 import random
+import re
 import string
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Mapping, Optional, Set, Tuple
+from urllib.parse import unquote
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 
@@ -80,6 +82,8 @@ class PlayerState:
     connected: bool = False
     speed_multiplier: float = 1.0
     fall_progress: float = 0.0
+    user_id: Optional[str] = None
+    username: Optional[str] = None
 
 
 TETROMINOES: Dict[str, List[List[Tuple[int, int]]]] = {
@@ -132,13 +136,44 @@ def generate_room_id(length: int = 6) -> str:
     return "".join(random.choice(ROOM_ID_ALPHABET) for _ in range(length))
 
 
+COOKIE_USER_ID = "totetris_uid"
+COOKIE_USERNAME = "totetris_username"
+HEX_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+USERNAME_MAX_LENGTH = 32
+
+
+def normalize_username(raw: str) -> str:
+    value = re.sub(r"\s+", " ", raw.strip())
+    return value[:USERNAME_MAX_LENGTH]
+
+
+def parse_identity_from_cookies(cookies: Mapping[str, str]) -> Tuple[str, str]:
+    raw_id = (cookies.get(COOKIE_USER_ID) or "").strip().lower()
+    raw_username = cookies.get(COOKIE_USERNAME)
+    if not raw_id or not HEX_ID_RE.match(raw_id):
+        raise HTTPException(status_code=400, detail="invalid identity cookie")
+    if raw_username is None:
+        raise HTTPException(status_code=400, detail="invalid identity cookie")
+    username = normalize_username(unquote(raw_username))
+    if not username:
+        raise HTTPException(status_code=400, detail="invalid identity cookie")
+    return raw_id, username
+
+
 # ---------------------------------------------------------------------------
 # Game room implementation
 # ---------------------------------------------------------------------------
 
 
 class GameRoom:
-    def __init__(self, room_id: str, config: GameConfig) -> None:
+    def __init__(
+        self,
+        room_id: str,
+        config: GameConfig,
+        *,
+        creator_user_id: Optional[str] = None,
+        creator_username: Optional[str] = None,
+    ) -> None:
         self.room_id = room_id
         self.config = config
         self.width = config.width
@@ -150,6 +185,10 @@ class GameRoom:
             "p1": PlayerState("p1"),
             "p2": PlayerState("p2"),
         }
+        self.creator_user_id: Optional[str] = None
+        self.creator_username: Optional[str] = None
+        self.joiner_user_id: Optional[str] = None
+        self.joiner_username: Optional[str] = None
         self.connections: List[Tuple[WebSocket, str]] = []
         self.status: str = "waiting"
         self.countdown_left: int = config.countdown
@@ -167,7 +206,27 @@ class GameRoom:
         self.penalty_pause_until: Optional[float] = None
         self.pending_penalty_reset: Optional[asyncio.Task] = None
 
+        if creator_user_id and creator_username:
+            self.reserve_player("p1", creator_user_id, creator_username)
+
     # ------------------------- utility methods -------------------------
+
+    def reserve_player(self, pid: str, user_id: str, username: str) -> None:
+        player = self.players[pid]
+        player.user_id = user_id
+        player.username = username
+        if pid == "p1":
+            self.creator_user_id = user_id
+            self.creator_username = username
+        elif pid == "p2":
+            self.joiner_user_id = user_id
+            self.joiner_username = username
+
+    def player_slot_for_user(self, user_id: str) -> Optional[str]:
+        for pid, player in self.players.items():
+            if player.user_id == user_id:
+                return pid
+        return None
 
     def reset_board(self) -> None:
         for y in range(self.height):
@@ -191,6 +250,9 @@ class GameRoom:
                 "score": player.score,
                 "color": PLAYER_COLORS[pid],
                 "active": active,
+                "username": player.username,
+                "user_id": player.user_id,
+                "connected": player.connected,
             }
         return result
 
@@ -204,6 +266,20 @@ class GameRoom:
             "winner": self.winner,
             "reason": self.finished_reason,
             "cleared_lines": list(self.last_cleared_lines),
+            "creator":
+                {
+                    "user_id": self.creator_user_id,
+                    "username": self.creator_username,
+                }
+                if self.creator_user_id
+                else None,
+            "joiner":
+                {
+                    "user_id": self.joiner_user_id,
+                    "username": self.joiner_username,
+                }
+                if self.joiner_user_id
+                else None,
             "penalty_event": dict(self.last_penalty_event)
             if self.penalty_event_dirty and self.last_penalty_event
             else None,
@@ -483,15 +559,31 @@ class GameRoom:
 
     # ------------------------- lifecycle control -------------------------
 
-    async def connect(self, websocket: WebSocket) -> str:
+    async def connect(self, websocket: WebSocket, user_id: str, username: str) -> str:
         await websocket.accept()
+        old_connections: List[WebSocket] = []
+        assigned_pid: Optional[str] = None
         async with self.lock:
-            pid = self.next_available_player()
+            pid = self.next_available_player(user_id)
             if pid is None:
                 await websocket.send_text(json.dumps({"type": "error", "message": "room_full"}))
                 await websocket.close(code=1000)
                 raise HTTPException(status_code=400, detail="Room already has two players")
+            opponent_pid = self.opponent_id(pid)
+            if opponent_pid:
+                opponent = self.players[opponent_pid]
+                if opponent.user_id and opponent.user_id == user_id and opponent_pid != pid:
+                    await websocket.close(code=1008)
+                    raise HTTPException(status_code=400, detail="cannot play against yourself")
             player = self.players[pid]
+            if player.user_id and player.user_id != user_id:
+                await websocket.close(code=1008)
+                raise HTTPException(status_code=400, detail="slot already taken")
+            self.reserve_player(pid, user_id, username)
+            for index, (ws, owner) in enumerate(list(self.connections)):
+                if owner == pid:
+                    old_connections.append(ws)
+                    del self.connections[index]
             player.connected = True
             player.speed_multiplier = 1.0
             player.fall_progress = 0.0
@@ -503,7 +595,15 @@ class GameRoom:
             self.connections.append((websocket, pid))
             await self.broadcast_state()
             await self.ensure_game_flow()
-            return pid
+            assigned_pid = pid
+        for previous in old_connections:
+            try:
+                await previous.close(code=1000)
+            except RuntimeError:
+                continue
+        if assigned_pid is None:
+            raise HTTPException(status_code=400, detail="failed to join room")
+        return assigned_pid
 
     async def disconnect(self, websocket: WebSocket, pid: str) -> None:
         async with self.lock:
@@ -522,7 +622,13 @@ class GameRoom:
             elif self.status == "waiting":
                 await self.broadcast_state()
 
-    def next_available_player(self) -> Optional[str]:
+    def next_available_player(self, user_id: str) -> Optional[str]:
+        existing = self.player_slot_for_user(user_id)
+        if existing is not None:
+            return existing
+        for pid, player in self.players.items():
+            if player.user_id is None and not player.connected:
+                return pid
         for pid, player in self.players.items():
             if not player.connected:
                 return pid
@@ -664,7 +770,11 @@ class GameManager:
         self.rooms: Dict[str, GameRoom] = {}
         self.lock = asyncio.Lock()
 
-    async def create_room(self) -> GameRoom:
+    async def create_room(
+        self,
+        creator_user_id: Optional[str] = None,
+        creator_username: Optional[str] = None,
+    ) -> GameRoom:
         async with self.lock:
             length = 6
             attempts = 0
@@ -672,7 +782,12 @@ class GameManager:
                 room_id = generate_room_id(length)
                 attempts += 1
                 if room_id not in self.rooms:
-                    room = GameRoom(room_id, self.config)
+                    room = GameRoom(
+                        room_id,
+                        self.config,
+                        creator_user_id=creator_user_id,
+                        creator_username=creator_username,
+                    )
                     self.rooms[room_id] = room
                     return room
                 # If the namespace is saturated or we keep failing to find a
@@ -703,21 +818,28 @@ class GameManager:
 class RandomMatchmaker:
     def __init__(self, manager: GameManager) -> None:
         self.manager = manager
-        self._waiting: Optional[Tuple[str, asyncio.Future[str]]] = None
+        self._waiting: Optional[Tuple[str, asyncio.Future[str], str, str]] = None
         self._lock = asyncio.Lock()
 
-    async def join(self) -> str:
+    async def join(self, user_id: str, username: str) -> str:
         loop = asyncio.get_running_loop()
 
         async with self._lock:
             if self._waiting is None:
-                room = await self.manager.create_room()
+                room = await self.manager.create_room(
+                    creator_user_id=user_id, creator_username=username
+                )
                 future: asyncio.Future[str] = loop.create_future()
                 room_id = room.room_id
-                self._waiting = (room_id, future)
+                self._waiting = (room_id, future, user_id, username)
             else:
-                room_id, future = self._waiting
+                room_id, future, waiting_user_id, _ = self._waiting
+                if waiting_user_id == user_id:
+                    return await future
                 self._waiting = None
+                room = await self.manager.get_room(room_id)
+                async with room.lock:
+                    room.reserve_player("p2", user_id, username)
                 if not future.done():
                     future.set_result(room_id)
                 return room_id
@@ -778,10 +900,34 @@ INDEX_HTML = """
     .random-button { background: linear-gradient(135deg, #f97316, #fb7185); box-shadow: 0 20px 40px rgba(251, 113, 133, 0.35); }
     .random-button:hover { transform: translateY(-2px); box-shadow: 0 24px 50px rgba(251, 113, 133, 0.45); }
     .note { font-size: 0.95rem; color: #94a3b8; margin: 0; line-height: 1.5; }
+    .user-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.95); display: flex; align-items: center; justify-content: center; padding: 2rem; z-index: 100; }
+    .user-overlay.hidden { display: none; }
+    .user-overlay-box { max-width: 420px; width: min(90vw, 420px); background: rgba(15, 23, 42, 0.92); border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 1rem; padding: 2.25rem 2rem; box-shadow: 0 24px 80px rgba(15, 23, 42, 0.65); display: grid; gap: 1.25rem; text-align: center; }
+    .user-overlay-box h2 { margin: 0; font-size: 1.6rem; }
+    .user-overlay-box p { margin: 0; line-height: 1.6; color: #cbd5f5; }
+    .user-form { display: grid; gap: 1rem; }
+    .user-label { text-align: left; font-weight: 600; font-size: 0.95rem; }
+    .user-input { padding: 0.75rem 1rem; border-radius: 0.75rem; border: 1px solid rgba(148, 163, 184, 0.35); background: rgba(15, 23, 42, 0.8); color: #e2e8f0; font-size: 1rem; }
+    .user-input:focus { outline: none; border-color: #38bdf8; box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25); }
+    .user-error { min-height: 1.25rem; font-size: 0.9rem; color: #fca5a5; text-align: left; }
+    .user-submit { padding: 0.85rem 1.6rem; border-radius: 999px; border: none; background: linear-gradient(135deg, #38bdf8, #818cf8); color: #0f172a; font-weight: 600; cursor: pointer; }
+    .user-submit:hover { filter: brightness(1.05); }
     .hidden { display: none !important; }
   </style>
 </head>
 <body>
+  <div id=\"user-overlay\" class=\"user-overlay hidden\">
+    <div class=\"user-overlay-box\">
+      <h2>Представьтесь</h2>
+      <p>Укажите имя, которое увидит ваш соперник в матче.</p>
+      <form id=\"user-form\" class=\"user-form\">
+        <label class=\"user-label\" for=\"user-name\">Ваше имя</label>
+        <input id=\"user-name\" class=\"user-input\" name=\"username\" maxlength=\"64\" autocomplete=\"off\" required />
+        <div id=\"user-error\" class=\"user-error\"></div>
+        <button type=\"submit\" class=\"user-submit\">Продолжить</button>
+      </form>
+    </div>
+  </div>
   <main>
     <h1>Totetris</h1>
     <p class=\"lead\">Сыграйте в дуэльный тетрис с другом: пригласите соперника и выясните, кто продержится дольше.</p>
@@ -821,13 +967,148 @@ INDEX_HTML = """
     <p id=\"random-status\" class=\"note hidden\">Ожидаем соперника</p>
     <p class=\"note\">Управление: стрелки &larr; &rarr; — движение, стрелка вверх — замедление в 3 раза, стрелка вниз — ускорение в 3 раза, пробел — поворот.</p>
   </main>
+  <div id=\"user-overlay\" class=\"user-overlay hidden\">
+    <div class=\"user-overlay-box\">
+      <h2>Добро пожаловать!</h2>
+      <p>Введите отображаемое имя — его увидит соперник во время игры.</p>
+      <form id=\"user-form\" class=\"user-form\">
+        <label class=\"user-label\" for=\"user-name\">Ваше имя</label>
+        <input id=\"user-name\" class=\"user-input\" name=\"username\" maxlength=\"64\" autocomplete=\"off\" required />
+        <div id=\"user-error\" class=\"user-error\"></div>
+        <button type=\"submit\" class=\"user-submit\">Продолжить</button>
+      </form>
+    </div>
+  </div>
   <script>
+    const USER_ID_COOKIE = 'totetris_uid';
+    const USERNAME_COOKIE = 'totetris_username';
+    const HEX_ID_REGEX = /^[0-9a-f]{32}$/;
+
+    const identityOverlay = document.getElementById('user-overlay');
+    const identityForm = document.getElementById('user-form');
+    const identityInput = document.getElementById('user-name');
+    const identityError = document.getElementById('user-error');
+
+    function getCookie(name) {
+      const cookies = document.cookie ? document.cookie.split(';') : [];
+      for (const cookie of cookies) {
+        const [key, ...rest] = cookie.trim().split('=');
+        if (key === name) {
+          return rest.join('=');
+        }
+      }
+      return null;
+    }
+
+    function setCookie(name, value, maxAgeSeconds) {
+      const parts = [`${name}=${value}`, 'path=/', `max-age=${maxAgeSeconds}`, 'samesite=lax'];
+      document.cookie = parts.join('; ');
+    }
+
+    function normalizeName(value) {
+      return value.trim().replace(/\\s+/g, ' ').slice(0, 32);
+    }
+
+    function readIdentity() {
+      const rawId = (getCookie(USER_ID_COOKIE) || '').trim().toLowerCase();
+      const rawName = getCookie(USERNAME_COOKIE);
+      if (!rawId || !HEX_ID_REGEX.test(rawId) || !rawName) {
+        return null;
+      }
+      try {
+        const username = normalizeName(decodeURIComponent(rawName));
+        if (!username) {
+          return null;
+        }
+        return { id: rawId, username };
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function generateHexId() {
+      if (window.crypto && window.crypto.getRandomValues) {
+        const bytes = new Uint8Array(16);
+        window.crypto.getRandomValues(bytes);
+        return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+      }
+      let result = '';
+      const alphabet = '0123456789abcdef';
+      for (let i = 0; i < 32; i += 1) {
+        result += alphabet[Math.floor(Math.random() * alphabet.length)];
+      }
+      return result;
+    }
+
+    let identityPromise = null;
+
+    function storeIdentity(id, username) {
+      const normalizedId = id.toLowerCase();
+      const normalizedName = normalizeName(username);
+      const maxAge = 60 * 60 * 24 * 365;
+      setCookie(USER_ID_COOKIE, normalizedId, maxAge);
+      setCookie(USERNAME_COOKIE, encodeURIComponent(normalizedName), maxAge);
+      return { id: normalizedId, username: normalizedName };
+    }
+
+    function requestIdentity() {
+      const existing = readIdentity();
+      if (existing) {
+        identityOverlay.classList.add('hidden');
+        return Promise.resolve(existing);
+      }
+      identityOverlay.classList.remove('hidden');
+      identityInput.value = '';
+      identityError.textContent = '';
+      identityInput.focus({ preventScroll: true });
+
+      return new Promise((resolve) => {
+        function handleSubmit(event) {
+          event.preventDefault();
+          const username = normalizeName(identityInput.value);
+          if (username.length < 2) {
+            identityError.textContent = 'Имя должно содержать не менее 2 символов.';
+            return;
+          }
+          const identity = storeIdentity(generateHexId(), username);
+          identityOverlay.classList.add('hidden');
+          identityForm.removeEventListener('submit', handleSubmit);
+          resolve(identity);
+        }
+
+        identityForm.addEventListener('submit', handleSubmit);
+        identityInput.addEventListener(
+          'input',
+          () => {
+            identityError.textContent = '';
+          },
+          { once: true },
+        );
+      });
+    }
+
+    function ensureIdentity() {
+      if (!identityPromise) {
+        identityPromise = requestIdentity();
+      }
+      return identityPromise;
+    }
+
     const playButton = document.getElementById('play');
     const randomButton = document.getElementById('random');
     const randomStatus = document.getElementById('random-status');
 
+    playButton.disabled = true;
+    randomButton.disabled = true;
+
+    ensureIdentity().then(() => {
+      playButton.disabled = false;
+      randomButton.disabled = false;
+    });
+
     async function startGame() {
       if (playButton.disabled) return;
+      await ensureIdentity();
       const originalText = playButton.textContent;
       const randomWasDisabled = randomButton.disabled;
       playButton.disabled = true;
@@ -854,6 +1135,7 @@ INDEX_HTML = """
 
     async function findRandomOpponent() {
       if (randomButton.disabled) return;
+      await ensureIdentity();
       const originalText = randomButton.textContent;
       randomButton.disabled = true;
       playButton.disabled = true;
@@ -923,6 +1205,18 @@ GAME_HTML = """
     .overlay-link { background: rgba(30, 41, 59, 0.92); padding: 0.75rem 1rem; border-radius: 0.75rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; word-break: break-all; width: 100%; box-sizing: border-box; border: 1px solid rgba(148, 163, 184, 0.25); color: #e2e8f0; }
     .overlay-copy { padding: 0.65rem 1.6rem; border-radius: 999px; border: none; cursor: pointer; background: #38bdf8; color: #0f172a; font-weight: 600; }
     .overlay-copy:hover { background: #0ea5e9; }
+    .user-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.95); display: flex; align-items: center; justify-content: center; padding: 2rem; z-index: 100; }
+    .user-overlay.hidden { display: none; }
+    .user-overlay-box { max-width: 420px; width: min(90vw, 420px); background: rgba(15, 23, 42, 0.92); border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 1rem; padding: 2.25rem 2rem; box-shadow: 0 24px 80px rgba(15, 23, 42, 0.65); display: grid; gap: 1.25rem; text-align: center; }
+    .user-overlay-box h2 { margin: 0; font-size: 1.6rem; }
+    .user-overlay-box p { margin: 0; line-height: 1.6; color: #cbd5f5; }
+    .user-form { display: grid; gap: 1rem; }
+    .user-label { text-align: left; font-weight: 600; font-size: 0.95rem; }
+    .user-input { padding: 0.75rem 1rem; border-radius: 0.75rem; border: 1px solid rgba(148, 163, 184, 0.35); background: rgba(15, 23, 42, 0.8); color: #e2e8f0; font-size: 1rem; }
+    .user-input:focus { outline: none; border-color: #38bdf8; box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25); }
+    .user-error { min-height: 1.25rem; font-size: 0.9rem; color: #fca5a5; text-align: left; }
+    .user-submit { padding: 0.85rem 1.6rem; border-radius: 999px; border: none; background: linear-gradient(135deg, #38bdf8, #818cf8); color: #0f172a; font-weight: 600; cursor: pointer; }
+    .user-submit:hover { filter: brightness(1.05); }
     .hidden { display: none !important; }
   </style>
 </head>
@@ -960,6 +1254,9 @@ GAME_HTML = """
   </div>
   <script>
     const roomId = "{room_id}";
+    const USER_ID_COOKIE = 'totetris_uid';
+    const USERNAME_COOKIE = 'totetris_username';
+    const HEX_ID_REGEX = /^[0-9a-f]{32}$/;
     const CELL_SIZE = 20;
     const CLEAR_ANIMATION_DURATION = 480;
     const DANGER_ZONE_ROWS = 3;
@@ -983,6 +1280,114 @@ GAME_HTML = """
     const overlayLink = document.getElementById('overlay-link');
     const overlayCopy = document.getElementById('overlay-copy');
     const overlayCopyDefaultText = overlayCopy.textContent;
+    let identityPromise = null;
+
+    function getCookie(name) {
+      const cookies = document.cookie ? document.cookie.split(';') : [];
+      for (const cookie of cookies) {
+        const [key, ...rest] = cookie.trim().split('=');
+        if (key === name) {
+          return rest.join('=');
+        }
+      }
+      return null;
+    }
+
+    function setCookie(name, value, maxAgeSeconds) {
+      const parts = [`${name}=${value}`, 'path=/', `max-age=${maxAgeSeconds}`, 'samesite=lax'];
+      document.cookie = parts.join('; ');
+    }
+
+    function normalizeName(value) {
+      return value.trim().replace(/\\s+/g, ' ').slice(0, 32);
+    }
+
+    function readIdentity() {
+      const rawId = (getCookie(USER_ID_COOKIE) || '').trim().toLowerCase();
+      const rawName = getCookie(USERNAME_COOKIE);
+      if (!rawId || !HEX_ID_REGEX.test(rawId) || !rawName) {
+        return null;
+      }
+      try {
+        const username = normalizeName(decodeURIComponent(rawName));
+        if (!username) {
+          return null;
+        }
+        return { id: rawId, username };
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function generateHexId() {
+      if (window.crypto && window.crypto.getRandomValues) {
+        const bytes = new Uint8Array(16);
+        window.crypto.getRandomValues(bytes);
+        return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+      }
+      let result = '';
+      const alphabet = '0123456789abcdef';
+      for (let i = 0; i < 32; i += 1) {
+        result += alphabet[Math.floor(Math.random() * alphabet.length)];
+      }
+      return result;
+    }
+
+    function storeIdentity(id, username) {
+      const normalizedId = id.toLowerCase();
+      const normalizedName = normalizeName(username);
+      const maxAge = 60 * 60 * 24 * 365;
+      setCookie(USER_ID_COOKIE, normalizedId, maxAge);
+      setCookie(USERNAME_COOKIE, encodeURIComponent(normalizedName), maxAge);
+      return { id: normalizedId, username: normalizedName };
+    }
+
+    function requestIdentity() {
+      const existing = readIdentity();
+      if (existing) {
+        identityOverlay.classList.add('hidden');
+        return Promise.resolve(existing);
+      }
+      identityOverlay.classList.remove('hidden');
+      identityInput.value = '';
+      identityError.textContent = '';
+      identityInput.focus({ preventScroll: true });
+
+      return new Promise((resolve) => {
+        function handleSubmit(event) {
+          event.preventDefault();
+          const username = normalizeName(identityInput.value);
+          if (username.length < 2) {
+            identityError.textContent = 'Имя должно содержать не менее 2 символов.';
+            return;
+          }
+          const identity = storeIdentity(generateHexId(), username);
+          identityOverlay.classList.add('hidden');
+          identityForm.removeEventListener('submit', handleSubmit);
+          resolve(identity);
+        }
+
+        identityForm.addEventListener('submit', handleSubmit);
+        identityInput.addEventListener(
+          'input',
+          () => {
+            identityError.textContent = '';
+          },
+          { once: true },
+        );
+      });
+    }
+
+    function ensureIdentity() {
+      if (!identityPromise) {
+        identityPromise = requestIdentity();
+      }
+      return identityPromise;
+    }
+    const identityOverlay = document.getElementById('user-overlay');
+    const identityForm = document.getElementById('user-form');
+    const identityInput = document.getElementById('user-name');
+    const identityError = document.getElementById('user-error');
 
     inviteLink.href = window.location.href;
     inviteLink.addEventListener('click', (event) => {
@@ -1400,18 +1805,38 @@ GAME_HTML = """
       return `${minutes}:${seconds.toString().padStart(2, '0')}`;
     }
 
+    function formatPlayerLabel(pid, info) {
+      const username = typeof info.username === 'string' ? info.username.trim() : '';
+      const isConnected = info.connected === true;
+      if (pid === you) {
+        return username ? `${username} (вы)` : 'Вы';
+      }
+      if (!isConnected) {
+        return 'Ожидаем соперника';
+      }
+      if (username) {
+        return `${username} (соперник)`;
+      }
+      return 'Соперник';
+    }
+
     function updateScores(players) {
       scoresEl.innerHTML = '';
-      for (const pid of Object.keys(players)) {
+      const order = ['p1', 'p2'];
+      for (const pid of order) {
+        const info = players[pid];
+        if (!info) {
+          continue;
+        }
         const item = document.createElement('li');
         const badge = document.createElement('span');
         badge.className = 'badge';
-        badge.style.backgroundColor = players[pid].color;
+        badge.style.backgroundColor = info.color;
         item.appendChild(badge);
         const label = document.createElement('span');
-        label.textContent = pid === you ? 'Вы' : (pid === 'p1' ? 'Игрок 1' : 'Игрок 2');
+        label.textContent = formatPlayerLabel(pid, info);
         const score = document.createElement('span');
-        score.textContent = players[pid].score;
+        score.textContent = info.score;
         item.appendChild(label);
         item.appendChild(score);
         scoresEl.appendChild(item);
@@ -1557,7 +1982,9 @@ GAME_HTML = """
       sendAction('restart');
     });
 
-    connect();
+    ensureIdentity().then(() => {
+      connect();
+    });
   </script>
 </body>
 </html>
@@ -1565,15 +1992,19 @@ GAME_HTML = """
 
 
 @app.post("/api/create")
-async def api_create() -> JSONResponse:
-    room = await manager.create_room()
+async def api_create(request: Request) -> JSONResponse:
+    user_id, username = parse_identity_from_cookies(request.cookies)
+    room = await manager.create_room(
+        creator_user_id=user_id, creator_username=username
+    )
     return JSONResponse({"room": room.room_id})
 
 
 @app.post("/api/random")
-async def api_random() -> JSONResponse:
+async def api_random(request: Request) -> JSONResponse:
+    user_id, username = parse_identity_from_cookies(request.cookies)
     try:
-        room_id = await matchmaker.join()
+        room_id = await matchmaker.join(user_id, username)
     except asyncio.CancelledError as exc:
         raise HTTPException(status_code=499, detail="client closed request") from exc
     return JSONResponse({"room": room_id})
@@ -1595,7 +2026,12 @@ async def game(room_id: str) -> HTMLResponse:
 async def websocket_endpoint(websocket: WebSocket, room_id: str) -> None:
     room = await manager.get_room(room_id)
     try:
-        pid = await room.connect(websocket)
+        user_id, username = parse_identity_from_cookies(websocket.cookies)
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
+    try:
+        pid = await room.connect(websocket, user_id, username)
     except HTTPException:
         return
     try:

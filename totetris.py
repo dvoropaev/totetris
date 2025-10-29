@@ -1277,6 +1277,18 @@ GAME_HTML = """
       </div>
     </div>
   </main>
+  <div id=\"user-overlay\" class=\"user-overlay hidden\">
+    <div class=\"user-overlay-box\">
+      <h2>Представьтесь</h2>
+      <p>Укажите имя, которое увидит ваш соперник в матче.</p>
+      <form id=\"user-form\" class=\"user-form\">
+        <label class=\"user-label\" for=\"user-name\">Ваше имя</label>
+        <input id=\"user-name\" class=\"user-input\" name=\"username\" maxlength=\"64\" autocomplete=\"off\" required />
+        <div id=\"user-error\" class=\"user-error\"></div>
+        <button type=\"submit\" class=\"user-submit\">Продолжить</button>
+      </form>
+    </div>
+  </div>
   <div id=\"overlay\" class=\"overlay\">
     <div class=\"overlay-box\">
       <h2 id=\"overlay-title\">Подключение...</h2>

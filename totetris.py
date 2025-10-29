@@ -220,6 +220,7 @@ class GameRoom:
             "p1": PlayerState("p1"),
             "p2": PlayerState("p2"),
         }
+        self.player_tickets: Dict[str, Optional[str]] = {"p1": None, "p2": None}
         self.creator_user_id: Optional[str] = None
         self.creator_username: Optional[str] = None
         self.joiner_user_id: Optional[str] = None
@@ -248,14 +249,26 @@ class GameRoom:
 
     def reserve_player(self, pid: str, user_id: str, username: str) -> None:
         player = self.players[pid]
+        previous_user_id = player.user_id
         player.user_id = user_id
         player.username = username
+        if previous_user_id != user_id:
+            self.player_tickets[pid] = None
         if pid == "p1":
             self.creator_user_id = user_id
             self.creator_username = username
         elif pid == "p2":
             self.joiner_user_id = user_id
             self.joiner_username = username
+
+    def set_player_ticket(self, pid: str, ticket: Optional[str]) -> None:
+        self.player_tickets[pid] = ticket
+
+    def ticket_owner(self, ticket: str) -> Optional[str]:
+        for pid, value in self.player_tickets.items():
+            if value and secrets.compare_digest(value, ticket):
+                return pid
+        return None
 
     def player_slot_for_user(self, user_id: str) -> Optional[str]:
         for pid, player in self.players.items():
@@ -594,27 +607,37 @@ class GameRoom:
 
     # ------------------------- lifecycle control -------------------------
 
-    async def connect(self, websocket: WebSocket, user_id: str, username: str) -> str:
+    async def connect(
+        self,
+        websocket: WebSocket,
+        user_id: str,
+        username: str,
+        ticket: Optional[str] = None,
+    ) -> str:
         await websocket.accept()
         old_connections: List[WebSocket] = []
         assigned_pid: Optional[str] = None
         async with self.lock:
-            pid = self.next_available_player(user_id)
+            pid: Optional[str]
+            if ticket:
+                assigned_pid = self.ticket_owner(ticket)
+                if assigned_pid is None:
+                    await websocket.close(code=1008)
+                    raise HTTPException(status_code=400, detail="invalid_ticket")
+                pid = assigned_pid
+            else:
+                pid = self.next_available_player(user_id)
             if pid is None:
                 await websocket.send_text(json.dumps({"type": "error", "message": "room_full"}))
                 await websocket.close(code=1000)
                 raise HTTPException(status_code=400, detail="Room already has two players")
-            opponent_pid = self.opponent_id(pid)
-            if opponent_pid:
-                opponent = self.players[opponent_pid]
-                if opponent.user_id and opponent.user_id == user_id and opponent_pid != pid:
-                    await websocket.close(code=1008)
-                    raise HTTPException(status_code=400, detail="cannot play against yourself")
             player = self.players[pid]
             if player.user_id and player.user_id != user_id:
                 await websocket.close(code=1008)
                 raise HTTPException(status_code=400, detail="slot already taken")
             self.reserve_player(pid, user_id, username)
+            if ticket:
+                self.set_player_ticket(pid, ticket)
             for index, (ws, owner) in enumerate(list(self.connections)):
                 if owner == pid:
                     old_connections.append(ws)
@@ -850,13 +873,22 @@ class GameManager:
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class WaitingPlayer:
+    room_id: str
+    future: asyncio.Future[Tuple[str, str, str]]
+    user_id: str
+    username: str
+    ticket: str
+
+
 class RandomMatchmaker:
     def __init__(self, manager: GameManager) -> None:
         self.manager = manager
-        self._waiting: Optional[Tuple[str, asyncio.Future[str], str, str]] = None
+        self._waiting: Optional[WaitingPlayer] = None
         self._lock = asyncio.Lock()
 
-    async def join(self, user_id: str, username: str) -> str:
+    async def join(self, user_id: str, username: str) -> Tuple[str, str, str]:
         loop = asyncio.get_running_loop()
 
         async with self._lock:
@@ -864,20 +896,29 @@ class RandomMatchmaker:
                 room = await self.manager.create_room(
                     creator_user_id=user_id, creator_username=username
                 )
-                future: asyncio.Future[str] = loop.create_future()
+                future: asyncio.Future[Tuple[str, str, str]] = loop.create_future()
                 room_id = room.room_id
-                self._waiting = (room_id, future, user_id, username)
+                ticket = secrets.token_urlsafe(12)
+                room.set_player_ticket("p1", ticket)
+                self._waiting = WaitingPlayer(
+                    room_id=room_id,
+                    future=future,
+                    user_id=user_id,
+                    username=username,
+                    ticket=ticket,
+                )
             else:
-                room_id, future, waiting_user_id, _ = self._waiting
-                if waiting_user_id == user_id:
-                    return await future
+                waiting = self._waiting
+                future = waiting.future
                 self._waiting = None
-                room = await self.manager.get_room(room_id)
+                room = await self.manager.get_room(waiting.room_id)
                 async with room.lock:
                     room.reserve_player("p2", user_id, username)
+                    ticket = secrets.token_urlsafe(12)
+                    room.set_player_ticket("p2", ticket)
                 if not future.done():
-                    future.set_result(room_id)
-                return room_id
+                    future.set_result((waiting.room_id, "p1", waiting.ticket))
+                return waiting.room_id, "p2", ticket
 
         try:
             return await future
@@ -885,8 +926,8 @@ class RandomMatchmaker:
             async with self._lock:
                 if (
                     self._waiting is not None
-                    and self._waiting[0] == room_id
-                    and self._waiting[1] is future
+                    and self._waiting.room_id == room_id
+                    and self._waiting.future is future
                     and not future.done()
                 ):
                     self._waiting = None
@@ -1183,6 +1224,13 @@ INDEX_HTML = """
           throw new Error('failed');
         }
         const data = await response.json();
+        if (data?.room && data?.ticket) {
+          try {
+            sessionStorage.setItem(`totetris_ticket_${data.room}`, data.ticket);
+          } catch (storageError) {
+            console.warn('Не удалось сохранить билет матча в sessionStorage', storageError);
+          }
+        }
         window.location.href = `/game/${data.room}`;
       } catch (error) {
         if (error?.name === 'AbortError') {
@@ -1301,6 +1349,14 @@ GAME_HTML = """
   </div>
   <script>
     const roomId = "{room_id}";
+    const ticketStorageKey = `totetris_ticket_${roomId}`;
+    let queueTicket = null;
+    try {
+      queueTicket = sessionStorage.getItem(ticketStorageKey);
+    } catch (storageError) {
+      console.warn('Не удалось прочитать билет матча из sessionStorage', storageError);
+      queueTicket = null;
+    }
     const USER_ID_COOKIE = 'totetris_uid';
     const USERNAME_COOKIE = 'totetris_username';
     const HEX_ID_REGEX = /^[0-9a-f]{32}$/;
@@ -1510,7 +1566,8 @@ GAME_HTML = """
       }
       const path = `${normalizedBase}/ws/${roomId}`;
       const fullPath = path.startsWith('/') ? path : `/${path}`;
-      return `${protocol}://${window.location.host}${fullPath}`;
+      const query = queueTicket ? `?ticket=${encodeURIComponent(queueTicket)}` : '';
+      return `${protocol}://${window.location.host}${fullPath}${query}`;
     }
 
     function connect() {
@@ -2060,10 +2117,12 @@ async def api_create(request: Request) -> JSONResponse:
 async def api_random(request: Request) -> JSONResponse:
     identity = parse_identity_from_cookies(request.cookies)
     try:
-        room_id = await matchmaker.join(identity.user_id, identity.username)
+        room_id, _slot, ticket = await matchmaker.join(
+            identity.user_id, identity.username
+        )
     except asyncio.CancelledError as exc:
         raise HTTPException(status_code=499, detail="client closed request") from exc
-    response = JSONResponse({"room": room_id})
+    response = JSONResponse({"room": room_id, "ticket": ticket})
     if not identity.cookies_valid:
         apply_identity_cookies(response, identity)
     return response
@@ -2085,8 +2144,9 @@ async def game(room_id: str) -> HTMLResponse:
 async def websocket_endpoint(websocket: WebSocket, room_id: str) -> None:
     room = await manager.get_room(room_id)
     identity = parse_identity_from_cookies(websocket.cookies)
+    ticket = websocket.query_params.get("ticket")
     try:
-        pid = await room.connect(websocket, identity.user_id, identity.username)
+        pid = await room.connect(websocket, identity.user_id, identity.username, ticket)
     except HTTPException:
         return
     if not identity.cookies_valid:

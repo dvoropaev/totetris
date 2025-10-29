@@ -73,6 +73,7 @@ class ActivePiece:
 @dataclass
 class PlayerState:
     pid: str
+    name: str = ""
     score: int = 0
     piece: Optional[ActivePiece] = None
     next_queue: List[str] = field(default_factory=list)
@@ -128,6 +129,10 @@ PENALTY_PAUSE_SECONDS = 1.0
 ROOM_ID_ALPHABET = string.ascii_lowercase + string.digits
 
 
+def default_player_name(pid: str) -> str:
+    return "Игрок 1" if pid == "p1" else "Игрок 2"
+
+
 def generate_room_id(length: int = 6) -> str:
     return "".join(random.choice(ROOM_ID_ALPHABET) for _ in range(length))
 
@@ -147,8 +152,8 @@ class GameRoom:
             [None for _ in range(self.width)] for _ in range(self.height)
         ]
         self.players: Dict[str, PlayerState] = {
-            "p1": PlayerState("p1"),
-            "p2": PlayerState("p2"),
+            "p1": PlayerState("p1", name=default_player_name("p1")),
+            "p2": PlayerState("p2", name=default_player_name("p2")),
         }
         self.connections: List[Tuple[WebSocket, str]] = []
         self.status: str = "waiting"
@@ -190,6 +195,7 @@ class GameRoom:
             result[pid] = {
                 "score": player.score,
                 "color": PLAYER_COLORS[pid],
+                "name": player.name or default_player_name(pid),
                 "active": active,
             }
         return result
@@ -456,6 +462,14 @@ class GameRoom:
             return
         player.speed_multiplier = max(0.1, min(value, 5.0))
 
+    def sanitize_player_name(self, value: object, pid: str) -> str:
+        if not isinstance(value, str):
+            return default_player_name(pid)
+        sanitized = " ".join(value.strip().split())
+        if not sanitized:
+            return default_player_name(pid)
+        return sanitized[:40]
+
     def tick_player(self, player: PlayerState) -> None:
         if not player.piece:
             return
@@ -513,6 +527,7 @@ class GameRoom:
                 player.speed_multiplier = 1.0
                 player.fall_progress = 0.0
                 player.soft_drop = False
+                player.name = default_player_name(pid)
             for index, (ws, owner) in enumerate(list(self.connections)):
                 if ws is websocket and owner == pid:
                     del self.connections[index]
@@ -612,6 +627,12 @@ class GameRoom:
     async def handle_message(self, pid: str, data: Dict[str, object]) -> None:
         player = self.players[pid]
         action = data.get("action")
+        if action == "set_name":
+            new_name = self.sanitize_player_name(data.get("name"), pid)
+            if player.name != new_name:
+                player.name = new_name
+                await self.broadcast_state()
+            return
         if self.status != "running":
             if action == "restart" and self.status == "finished":
                 await self.restart()
@@ -774,6 +795,15 @@ INDEX_HTML = """
     .play-button { padding: 1.1rem 2.75rem; font-size: 1.25rem; border-radius: 999px; border: none; cursor: pointer; background: linear-gradient(135deg, #38bdf8, #818cf8); color: #0f172a; font-weight: 700; box-shadow: 0 20px 40px rgba(56, 189, 248, 0.35); transition: transform 0.2s ease, box-shadow 0.2s ease; }
     .play-button:hover { transform: translateY(-2px); box-shadow: 0 24px 50px rgba(56, 189, 248, 0.45); }
     .play-button:disabled { opacity: 0.6; cursor: wait; box-shadow: none; }
+    .player-name-box { display: grid; gap: 0.6rem; padding: 1rem 1.5rem; border-radius: 1rem; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(148, 163, 184, 0.16); color: #cbd5f5; max-width: 360px; width: min(100%, 360px); text-align: center; }
+    .player-name-label { font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.75rem; color: #94a3b8; }
+    .player-name-input { width: 100%; padding: 0.65rem 0.95rem; border-radius: 0.75rem; border: 1px solid rgba(148, 163, 184, 0.35); background: rgba(15, 23, 42, 0.9); color: #f8fafc; font-size: 1rem; transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease; }
+    .player-name-input:focus { outline: none; border-color: rgba(56, 189, 248, 0.85); box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2); background: rgba(15, 23, 42, 0.95); }
+    .player-name-hint { margin: 0; font-size: 0.85rem; color: #94a3b8; }
+    .player-name-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.75rem; align-items: center; }
+    .change-name-button { padding: 0.5rem 1.6rem; border-radius: 999px; border: none; cursor: pointer; background: rgba(56, 189, 248, 0.15); color: #38bdf8; font-weight: 600; transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease; }
+    .change-name-button:hover { background: rgba(56, 189, 248, 0.25); color: #f0f9ff; transform: translateY(-1px); }
+    .player-name-status { min-height: 1em; font-size: 0.85rem; color: #94a3b8; }
     .cta-buttons { display: flex; flex-wrap: wrap; justify-content: center; gap: 1rem; }
     .random-button { background: linear-gradient(135deg, #f97316, #fb7185); box-shadow: 0 20px 40px rgba(251, 113, 133, 0.35); }
     .random-button:hover { transform: translateY(-2px); box-shadow: 0 24px 50px rgba(251, 113, 133, 0.45); }
@@ -814,6 +844,15 @@ INDEX_HTML = """
         </article>
       </div>
     </section>
+    <form id=\"player-name-form\" class=\"player-name-box\" autocomplete=\"off\">
+      <label class=\"player-name-label\" for=\"player-name-input\">Ваше имя</label>
+      <input id=\"player-name-input\" class=\"player-name-input\" name=\"name\" type=\"text\" maxlength=\"40\" placeholder=\"Игрок\" />
+      <p class=\"player-name-hint\">Это имя увидит ваш соперник.</p>
+      <div class=\"player-name-actions\">
+        <button type=\"submit\" id=\"save-name\" class=\"change-name-button\">Сохранить</button>
+        <span id=\"player-name-status\" class=\"player-name-status\" aria-live=\"polite\"></span>
+      </div>
+    </form>
     <div class=\"cta-buttons\">
       <button id=\"play\" class=\"play-button\">Сыграть с другом</button>
       <button id=\"random\" class=\"play-button random-button\">Случайный соперник</button>
@@ -822,12 +861,109 @@ INDEX_HTML = """
     <p class=\"note\">Управление: стрелки &larr; &rarr; — движение, стрелка вверх — замедление в 3 раза, стрелка вниз — ускорение в 3 раза, пробел — поворот.</p>
   </main>
   <script>
+    const PLAYER_NAME_COOKIE = 'totetris_name';
     const playButton = document.getElementById('play');
     const randomButton = document.getElementById('random');
     const randomStatus = document.getElementById('random-status');
+    const nameForm = document.getElementById('player-name-form');
+    const nameInput = document.getElementById('player-name-input');
+    const nameStatus = document.getElementById('player-name-status');
+
+    function getStoredPlayerName() {
+      const prefix = `${PLAYER_NAME_COOKIE}=`;
+      const cookie = document.cookie
+        .split(';')
+        .map((entry) => entry.trim())
+        .find((entry) => entry.startsWith(prefix));
+      if (!cookie) return '';
+      const value = cookie.slice(prefix.length);
+      try {
+        return decodeURIComponent(value);
+      } catch (error) {
+        console.warn('Не удалось декодировать имя игрока из cookie', error);
+        return value;
+      }
+    }
+
+    function normalizePlayerName(value, fallback = 'Игрок') {
+      if (typeof value !== 'string') return fallback;
+      const trimmed = value.trim().replace(/\\s+/g, ' ');
+      if (!trimmed) return fallback;
+      return trimmed.slice(0, 40);
+    }
+
+    function persistPlayerName(name) {
+      const normalized = normalizePlayerName(name);
+      const maxAge = 60 * 60 * 24 * 365;
+      document.cookie = `${PLAYER_NAME_COOKIE}=${encodeURIComponent(normalized)}; path=/; max-age=${maxAge}; SameSite=Lax`;
+      return normalized;
+    }
+
+    function ensurePlayerName() {
+      const storedRaw = getStoredPlayerName();
+      const stored = normalizePlayerName(storedRaw, '');
+      if (stored) {
+        if (stored !== storedRaw) {
+          persistPlayerName(stored);
+        }
+        return stored;
+      }
+      return persistPlayerName('Игрок');
+    }
+
+    function commitPlayerName(value) {
+      const normalized = normalizePlayerName(value, 'Игрок');
+      return persistPlayerName(normalized);
+    }
+
+    function updateNameInput(value) {
+      if (nameInput) {
+        nameInput.value = value;
+      }
+    }
+
+    let nameStatusTimeout = null;
+    function showNameStatus(text) {
+      if (!nameStatus) return;
+      nameStatus.textContent = text;
+      if (nameStatusTimeout) {
+        clearTimeout(nameStatusTimeout);
+      }
+      if (text) {
+        nameStatusTimeout = setTimeout(() => {
+          nameStatus.textContent = '';
+          nameStatusTimeout = null;
+        }, 2500);
+      }
+    }
+
+    let currentPlayerName = ensurePlayerName();
+    updateNameInput(currentPlayerName);
+
+    if (nameForm) {
+      nameForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const next = commitPlayerName(nameInput ? nameInput.value : currentPlayerName);
+        currentPlayerName = next;
+        updateNameInput(next);
+        showNameStatus('Сохранено');
+      });
+    }
+
+    if (nameInput) {
+      nameInput.addEventListener('input', () => {
+        if (nameStatusTimeout) {
+          clearTimeout(nameStatusTimeout);
+          nameStatusTimeout = null;
+        }
+        showNameStatus('');
+      });
+    }
 
     async function startGame() {
       if (playButton.disabled) return;
+      currentPlayerName = commitPlayerName(nameInput ? nameInput.value : currentPlayerName);
+      updateNameInput(currentPlayerName);
       const originalText = playButton.textContent;
       const randomWasDisabled = randomButton.disabled;
       playButton.disabled = true;
@@ -854,6 +990,8 @@ INDEX_HTML = """
 
     async function findRandomOpponent() {
       if (randomButton.disabled) return;
+      currentPlayerName = commitPlayerName(nameInput ? nameInput.value : currentPlayerName);
+      updateNameInput(currentPlayerName);
       const originalText = randomButton.textContent;
       randomButton.disabled = true;
       playButton.disabled = true;
@@ -900,29 +1038,41 @@ GAME_HTML = """
     main { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 2rem 1rem; gap: 1.5rem; min-height: 100vh; box-sizing: border-box; }
     h1 { margin: 0; }
     #board { background: #1e293b; border: 2px solid #334155; border-radius: 0.5rem; box-shadow: 0 12px 40px rgba(15,23,42,0.35); }
-    .game-area { display: flex; flex-direction: column; align-items: center; gap: 1.25rem; }
+    .game-area { display: flex; flex-direction: column; align-items: center; gap: 2rem; }
     .game-area.hidden { display: none !important; }
-    .hud { display: flex; flex-wrap: wrap; gap: 1.5rem; justify-content: center; }
-    .panel { background: rgba(15, 23, 42, 0.75); padding: 1.25rem 1.5rem; border-radius: 0.75rem; min-width: 200px; box-shadow: 0 18px 45px rgba(15, 23, 42, 0.45); border: 1px solid rgba(148, 163, 184, 0.12); }
+    .game-layout { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 1.5rem; }
+    .score-panel { background: rgba(15, 23, 42, 0.75); padding: 1.5rem 1.75rem; border-radius: 1rem; min-width: 180px; box-shadow: 0 18px 45px rgba(15, 23, 42, 0.45); border: 1px solid rgba(148, 163, 184, 0.12); display: flex; flex-direction: column; gap: 0.75rem; align-items: center; text-align: center; transition: box-shadow 0.2s ease, transform 0.2s ease; }
+    .score-panel-left { text-align: right; align-items: flex-end; }
+    .score-panel-right { text-align: left; align-items: flex-start; }
+    .score-panel.you { box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.35), 0 18px 45px rgba(15, 23, 42, 0.45); transform: translateY(-4px); }
+    .score-name-row { display: flex; align-items: center; gap: 0.5rem; font-size: 1.05rem; font-weight: 600; color: #f8fafc; }
+    .score-badge { display: inline-block; width: 12px; height: 12px; border-radius: 999px; background: #64748b; }
+    .score-value { font-size: clamp(2.2rem, 5vw, 3.2rem); font-weight: 700; color: #f8fafc; line-height: 1; }
+    .score-you { display: none; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.12em; padding: 0.2rem 0.6rem; border-radius: 999px; background: rgba(56, 189, 248, 0.18); color: #38bdf8; }
+    .score-panel.you .score-you { display: inline-flex; }
+    .hud { display: flex; justify-content: center; }
+    .panel { background: rgba(15, 23, 42, 0.75); padding: 1.25rem 1.5rem; border-radius: 0.75rem; min-width: 220px; box-shadow: 0 18px 45px rgba(15, 23, 42, 0.45); border: 1px solid rgba(148, 163, 184, 0.12); }
     h2 { margin: 0 0 0.75rem 0; font-size: 1rem; }
-    .scores { list-style: none; padding: 0; margin: 0; }
-    .scores li { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
-    .badge { display: inline-block; width: 12px; height: 12px; border-radius: 999px; margin-right: 0.5rem; }
     .status { font-weight: 600; }
-    .link { color: #38bdf8; cursor: pointer; }
-    .actions { display: flex; gap: 0.75rem; margin-top: 0.75rem; flex-wrap: wrap; }
-    button { padding: 0.65rem 1.1rem; border-radius: 0.65rem; border: none; cursor: pointer; background: #38bdf8; color: #0f172a; font-weight: 600; }
-    button:hover { background: #0ea5e9; }
     .overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.94); display: flex; align-items: center; justify-content: center; padding: 2rem; z-index: 20; }
     .overlay.hidden { display: none; }
     .overlay-box { max-width: 440px; width: min(90vw, 440px); background: rgba(15, 23, 42, 0.88); border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 1rem; padding: 2.5rem 2rem; text-align: center; box-shadow: 0 30px 90px rgba(15, 23, 42, 0.65); }
     .overlay-box h2 { margin: 0 0 1rem 0; font-size: 1.6rem; }
     .overlay-box p { margin: 0 0 1.75rem 0; line-height: 1.6; color: #cbd5f5; }
-    .overlay-share { display: flex; flex-direction: column; gap: 0.75rem; align-items: center; }
-    .overlay-share.hidden { display: none; }
+    .overlay-message.hidden { display: none; }
+    .overlay-form { display: grid; gap: 0.75rem; margin-top: 0.5rem; }
+    .overlay-form.hidden { display: none; }
+    .overlay-form-label { font-weight: 600; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; }
+    .overlay-input { width: 100%; padding: 0.75rem 1rem; border-radius: 0.85rem; border: 1px solid rgba(148, 163, 184, 0.35); background: rgba(15, 23, 42, 0.92); color: #f8fafc; font-size: 1rem; transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease; }
+    .overlay-input:focus { outline: none; border-color: rgba(56, 189, 248, 0.85); box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2); background: rgba(15, 23, 42, 0.96); }
+    .overlay-form-error { margin: 0; font-size: 0.85rem; color: #fca5a5; min-height: 1.2em; }
+    .overlay-form-actions { display: flex; justify-content: center; gap: 0.75rem; align-items: center; }
+    .overlay-primary-button { padding: 0.65rem 1.8rem; border-radius: 999px; border: none; cursor: pointer; font-weight: 600; background: linear-gradient(135deg, #38bdf8, #818cf8); color: #0f172a; box-shadow: 0 16px 40px rgba(56, 189, 248, 0.35); transition: transform 0.2s ease, box-shadow 0.2s ease; }
+    .overlay-primary-button:hover { transform: translateY(-1px); box-shadow: 0 20px 48px rgba(56, 189, 248, 0.45); }
+    .overlay-link-wrapper { display: grid; gap: 0.4rem; align-items: center; justify-items: center; }
+    .overlay-link-wrapper.hidden { display: none; }
+    .overlay-link-label { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; }
     .overlay-link { background: rgba(30, 41, 59, 0.92); padding: 0.75rem 1rem; border-radius: 0.75rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; word-break: break-all; width: 100%; box-sizing: border-box; border: 1px solid rgba(148, 163, 184, 0.25); color: #e2e8f0; }
-    .overlay-copy { padding: 0.65rem 1.6rem; border-radius: 999px; border: none; cursor: pointer; background: #38bdf8; color: #0f172a; font-weight: 600; }
-    .overlay-copy:hover { background: #0ea5e9; }
     .hidden { display: none !important; }
   </style>
 </head>
@@ -930,20 +1080,30 @@ GAME_HTML = """
   <main>
     <h1>Totetris</h1>
     <div id=\"game-area\" class=\"game-area hidden\">
-      <canvas id=\"board\" width=\"400\" height=\"600\"></canvas>
+      <div class=\"game-layout\">
+        <div class=\"score-panel score-panel-left\" id=\"score-panel-p1\">
+          <div class=\"score-name-row\">
+            <span class=\"score-badge\" id=\"score-badge-p1\"></span>
+            <span id=\"score-name-p1\"></span>
+            <span class=\"score-you\" id=\"score-you-p1\">Вы</span>
+          </div>
+          <div id=\"score-value-p1\" class=\"score-value\">0</div>
+        </div>
+        <canvas id=\"board\" width=\"400\" height=\"600\"></canvas>
+        <div class=\"score-panel score-panel-right\" id=\"score-panel-p2\">
+          <div class=\"score-name-row\">
+            <span class=\"score-badge\" id=\"score-badge-p2\"></span>
+            <span id=\"score-name-p2\"></span>
+            <span class=\"score-you\" id=\"score-you-p2\">Вы</span>
+          </div>
+          <div id=\"score-value-p2\" class=\"score-value\">0</div>
+        </div>
+      </div>
       <div class=\"hud\">
         <div class=\"panel\">
           <h2>Статус</h2>
           <div id=\"status\" class=\"status\"></div>
           <div id=\"timer\"></div>
-          <div class=\"actions\">
-            <button id=\"restart\" disabled>Рестарт</button>
-            <a class=\"link\" id=\"invite\" target=\"_blank\">Скопировать ссылку</a>
-          </div>
-        </div>
-        <div class=\"panel\">
-          <h2>Счёт</h2>
-          <ul id=\"scores\" class=\"scores\"></ul>
         </div>
       </div>
     </div>
@@ -951,10 +1111,20 @@ GAME_HTML = """
   <div id=\"overlay\" class=\"overlay\">
     <div class=\"overlay-box\">
       <h2 id=\"overlay-title\">Подключение...</h2>
-      <p id=\"overlay-text\">Подключаемся к комнате, пожалуйста, подождите.</p>
-      <div id=\"overlay-share\" class=\"overlay-share hidden\">
+      <div id=\"overlay-message\" class=\"overlay-message\">
+        <p id=\"overlay-text\">Подключаемся к комнате, пожалуйста, подождите.</p>
+      </div>
+      <form id=\"overlay-name-form\" class=\"overlay-form hidden\" autocomplete=\"off\">
+        <label class=\"overlay-form-label\" for=\"overlay-name-input\">Ваше имя</label>
+        <input id=\"overlay-name-input\" class=\"overlay-input\" name=\"name\" type=\"text\" maxlength=\"40\" placeholder=\"Игрок\" />
+        <p id=\"overlay-name-error\" class=\"overlay-form-error\" aria-live=\"polite\"></p>
+        <div class=\"overlay-form-actions\">
+          <button type=\"submit\" class=\"overlay-primary-button\">Продолжить</button>
+        </div>
+      </form>
+      <div id=\"overlay-link-wrapper\" class=\"overlay-link-wrapper hidden\">
+        <span class=\"overlay-link-label\">Ссылка на комнату</span>
         <span id=\"overlay-link\" class=\"overlay-link\"></span>
-        <button id=\"overlay-copy\" class=\"overlay-copy\">Скопировать ссылку</button>
       </div>
     </div>
   </div>
@@ -971,29 +1141,165 @@ GAME_HTML = """
     const ctx = canvas.getContext('2d');
     const statusEl = document.getElementById('status');
     const timerEl = document.getElementById('timer');
-    const scoresEl = document.getElementById('scores');
-    const restartButton = document.getElementById('restart');
-    const inviteLink = document.getElementById('invite');
-    const inviteLinkDefaultText = inviteLink.textContent;
+    const scorePanels = {
+      p1: {
+        container: document.getElementById('score-panel-p1'),
+        name: document.getElementById('score-name-p1'),
+        value: document.getElementById('score-value-p1'),
+        badge: document.getElementById('score-badge-p1'),
+      },
+      p2: {
+        container: document.getElementById('score-panel-p2'),
+        name: document.getElementById('score-name-p2'),
+        value: document.getElementById('score-value-p2'),
+        badge: document.getElementById('score-badge-p2'),
+      },
+    };
     const gameArea = document.getElementById('game-area');
     const overlay = document.getElementById('overlay');
     const overlayTitle = document.getElementById('overlay-title');
     const overlayText = document.getElementById('overlay-text');
-    const overlayShare = document.getElementById('overlay-share');
+    const overlayMessage = document.getElementById('overlay-message');
+    const overlayForm = document.getElementById('overlay-name-form');
+    const overlayNameInput = document.getElementById('overlay-name-input');
+    const overlayNameError = document.getElementById('overlay-name-error');
+    const overlayLinkWrapper = document.getElementById('overlay-link-wrapper');
     const overlayLink = document.getElementById('overlay-link');
-    const overlayCopy = document.getElementById('overlay-copy');
-    const overlayCopyDefaultText = overlayCopy.textContent;
 
-    inviteLink.href = window.location.href;
-    inviteLink.addEventListener('click', (event) => {
-      event.preventDefault();
-      copyInviteLink(inviteLink);
-    });
+    const PLAYER_NAME_COOKIE = 'totetris_name';
 
-    overlayCopy.addEventListener('click', (event) => {
-      event.preventDefault();
-      copyInviteLink(overlayCopy);
-    });
+    function getStoredPlayerName() {
+      const prefix = `${PLAYER_NAME_COOKIE}=`;
+      const cookie = document.cookie
+        .split(';')
+        .map((entry) => entry.trim())
+        .find((entry) => entry.startsWith(prefix));
+      if (!cookie) return '';
+      const value = cookie.slice(prefix.length);
+      try {
+        return decodeURIComponent(value);
+      } catch (error) {
+        console.warn('Не удалось декодировать имя игрока из cookie', error);
+        return value;
+      }
+    }
+
+    function normalizePlayerName(value, fallback = 'Игрок') {
+      if (typeof value !== 'string') return fallback;
+      const trimmed = value.trim().replace(/\\s+/g, ' ');
+      if (!trimmed) return fallback;
+      return trimmed.slice(0, 40);
+    }
+
+    function persistPlayerName(name) {
+      const normalized = normalizePlayerName(name);
+      const maxAge = 60 * 60 * 24 * 365;
+      document.cookie = `${PLAYER_NAME_COOKIE}=${encodeURIComponent(normalized)}; path=/; max-age=${maxAge}; SameSite=Lax`;
+      return normalized;
+    }
+
+    let pendingNamePromise = null;
+    let resolvePendingName = null;
+
+    function showNameForm(initial = '') {
+      if (overlayTitle) {
+        overlayTitle.textContent = 'Введите имя';
+      }
+      if (overlayText) {
+        overlayText.textContent = 'Укажите имя, которое увидит соперник.';
+      }
+      if (overlayMessage) {
+        overlayMessage.classList.remove('hidden');
+      }
+      if (overlayForm) {
+        overlayForm.classList.remove('hidden');
+      }
+      if (overlayLinkWrapper) {
+        overlayLinkWrapper.classList.add('hidden');
+      }
+      if (overlayLink) {
+        overlayLink.textContent = '';
+      }
+      if (overlayNameError) {
+        overlayNameError.textContent = '';
+      }
+      if (overlay) {
+        overlay.classList.remove('hidden');
+      }
+      if (overlayNameInput) {
+        overlayNameInput.value = initial;
+        requestAnimationFrame(() => {
+          overlayNameInput.focus();
+        });
+      }
+    }
+
+    function ensurePlayerName() {
+      const storedRaw = getStoredPlayerName();
+      const stored = normalizePlayerName(storedRaw, '');
+      if (stored) {
+        if (stored !== storedRaw) {
+          persistPlayerName(stored);
+        }
+        return Promise.resolve(stored);
+      }
+      if (pendingNamePromise) {
+        return pendingNamePromise;
+      }
+      pendingNamePromise = new Promise((resolve) => {
+        resolvePendingName = resolve;
+        showNameForm('');
+      });
+      return pendingNamePromise;
+    }
+
+    if (overlayForm) {
+      overlayForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const raw = overlayNameInput ? overlayNameInput.value : '';
+        const normalized = normalizePlayerName(raw, '');
+        if (!normalized) {
+          if (overlayNameError) {
+            overlayNameError.textContent = 'Введите имя, чтобы продолжить.';
+          }
+          if (overlayNameInput) {
+            overlayNameInput.focus();
+          }
+          return;
+        }
+        const persisted = persistPlayerName(normalized);
+        if (overlayNameError) {
+          overlayNameError.textContent = '';
+        }
+        if (overlayNameInput) {
+          overlayNameInput.value = persisted;
+        }
+        if (typeof resolvePendingName === 'function') {
+          const resolver = resolvePendingName;
+          resolvePendingName = null;
+          pendingNamePromise = null;
+          resolver(persisted);
+        }
+      });
+    }
+
+    if (overlayNameInput) {
+      overlayNameInput.addEventListener('input', () => {
+        if (overlayNameError) {
+          overlayNameError.textContent = '';
+        }
+      });
+    }
+
+    let localPlayerName = '';
+    updateScores({});
+
+    (async () => {
+      localPlayerName = await ensurePlayerName();
+      updateScores({});
+      showOverlay('Подключение...', 'Подключаемся к комнате, пожалуйста, подождите.');
+      connect();
+    })();
 
     let ws = null;
     let you = null;
@@ -1005,41 +1311,37 @@ GAME_HTML = """
     let boardResetAnimation = null;
     let lastPenaltyEventId = 0;
 
-    function copyInviteLink(target) {
-      const originalText = target.textContent;
-      const showSuccess = () => {
-        target.textContent = 'Ссылка скопирована!';
-        setTimeout(() => { target.textContent = originalText; }, 2000);
-      };
-      const fallback = () => {
-        const response = window.prompt('Скопируйте ссылку и отправьте другу:', window.location.href);
-        if (response !== null) {
-          showSuccess();
-        }
-      };
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(window.location.href).then(showSuccess).catch(fallback);
-      } else {
-        fallback();
+    function showOverlay(title, text, { link = null } = {}) {
+      if (overlayTitle) {
+        overlayTitle.textContent = title;
       }
-    }
-
-    function showOverlay(title, text, { showShare = false } = {}) {
-      overlayTitle.textContent = title;
-      overlayText.textContent = text;
-      if (showShare) {
-        overlayShare.classList.remove('hidden');
-        overlayLink.textContent = window.location.href;
-        overlayCopy.textContent = overlayCopyDefaultText;
-        inviteLink.textContent = inviteLinkDefaultText;
+      if (overlayText) {
+        overlayText.textContent = text;
+      }
+      if (overlayMessage) {
+        overlayMessage.classList.remove('hidden');
+      }
+      if (overlayForm) {
+        overlayForm.classList.add('hidden');
+      }
+      if (overlayNameError) {
+        overlayNameError.textContent = '';
+      }
+      if (link) {
+        overlayLinkWrapper.classList.remove('hidden');
+        overlayLink.textContent = link;
       } else {
-        overlayShare.classList.add('hidden');
+        overlayLinkWrapper.classList.add('hidden');
+        overlayLink.textContent = '';
       }
       overlay.classList.remove('hidden');
     }
 
     function hideOverlay() {
       overlay.classList.add('hidden');
+      if (overlayForm) {
+        overlayForm.classList.add('hidden');
+      }
     }
 
     function buildWebSocketUrl() {
@@ -1063,6 +1365,13 @@ GAME_HTML = """
 
     function connect() {
       ws = new WebSocket(buildWebSocketUrl());
+
+      ws.addEventListener('open', () => {
+        if (!localPlayerName) {
+          localPlayerName = normalizePlayerName(getStoredPlayerName(), 'Игрок');
+        }
+        sendAction('set_name', { name: localPlayerName });
+      });
 
       ws.addEventListener('message', (event) => {
         const state = JSON.parse(event.data);
@@ -1401,20 +1710,23 @@ GAME_HTML = """
     }
 
     function updateScores(players) {
-      scoresEl.innerHTML = '';
-      for (const pid of Object.keys(players)) {
-        const item = document.createElement('li');
-        const badge = document.createElement('span');
-        badge.className = 'badge';
-        badge.style.backgroundColor = players[pid].color;
-        item.appendChild(badge);
-        const label = document.createElement('span');
-        label.textContent = pid === you ? 'Вы' : (pid === 'p1' ? 'Игрок 1' : 'Игрок 2');
-        const score = document.createElement('span');
-        score.textContent = players[pid].score;
-        item.appendChild(label);
-        item.appendChild(score);
-        scoresEl.appendChild(item);
+      const fallbackNames = { p1: 'Игрок 1', p2: 'Игрок 2' };
+      for (const pid of Object.keys(scorePanels)) {
+        const panel = scorePanels[pid];
+        const data = players?.[pid] || {};
+        if (panel.name) {
+          panel.name.textContent = data.name || fallbackNames[pid];
+        }
+        if (panel.value) {
+          const value = typeof data.score === 'number' ? data.score : 0;
+          panel.value.textContent = value;
+        }
+        if (panel.badge) {
+          panel.badge.style.backgroundColor = data.color || '#64748b';
+        }
+        if (panel.container) {
+          panel.container.classList.toggle('you', pid === you);
+        }
       }
     }
 
@@ -1464,7 +1776,6 @@ GAME_HTML = """
       scheduleRender();
       statusEl.textContent = formatStatus(state);
       timerEl.textContent = formatTimer(state);
-      restartButton.disabled = state.status !== 'finished';
       updateScores(state.players);
 
       const showBoard = state.status === 'running' || state.status === 'finished';
@@ -1472,7 +1783,7 @@ GAME_HTML = """
 
       if (!showBoard) {
         if (state.status === 'waiting') {
-          showOverlay('Ожидание соперника', 'Отправьте своему другу ссылку, чтобы начать игру.', { showShare: true });
+          showOverlay('Ожидание соперника', 'Отправьте своему другу ссылку, чтобы начать игру.', { link: window.location.href });
         } else if (state.status === 'countdown') {
           const seconds = Math.max(state.countdown, 0);
           const text = seconds > 0 ? `Игра начнётся через ${seconds} сек.` : 'Игра начинается!';
@@ -1551,10 +1862,6 @@ GAME_HTML = """
           }
           break;
       }
-    });
-
-    restartButton.addEventListener('click', () => {
-      sendAction('restart');
     });
 
     connect();
